@@ -1,14 +1,3 @@
-# ==========================================================================
-# 定期拉取新版 yt-dlp 并自动构建 / 推送镜像到 GHCR
-#
-# 触发方式：
-#   1. 定时（schedule） 每周三 02:00 UTC（北京时间每周三 10:00）
-#   2. 手动（workflow_dispatch） 在 Actions 页面点 "Run workflow"
-#   3. 推送 main 分支 / 打 v* 标签
-#
-# yt-dlp 在 requirements.txt 中不锁版本，因此每次构建都会拉取最新版，
-# 配合定时重建即可实现"自动跟随新版"。
-# ==========================================================================
 name: Build & Push Image
 
 on:
@@ -21,9 +10,6 @@ on:
     tags:
       - "v*"
 
-env:
-  IMAGE_NAME: ${{ toLower(github.repository) }}   # Dremous/yt-dlp-webui -> dremous/yt-dlp-webui
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -34,6 +20,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Compute lowercase image name
+        id: image
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -51,5 +41,5 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ env.IMAGE_NAME }}:latest
-            ghcr.io/${{ env.IMAGE_NAME }}:${{ github.run_number }}
+            ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:latest
+            ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ github.run_number }}
