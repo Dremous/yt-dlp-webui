@@ -1,0 +1,16 @@
+services:
+  yt-dlp-webui:
+    build: .
+    container_name: yt-dlp-webui
+    image: yt-dlp-webui:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      # 下载文件持久化
+      - ./downloads:/downloads
+      # Cookie 持久化
+      - ./config:/config
+    environment:
+      - DOWNLOAD_DIR=/downloads
+      - COOKIE_FILE=/config/cookies.txt
+    restart: unless-stopped

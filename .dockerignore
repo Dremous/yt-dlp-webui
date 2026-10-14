@@ -1,0 +1,13 @@
+# 构建上下文排除项
+.git
+.gitignore
+*.md
+.env
+__pycache__
+*.pyc
+downloads/
+config/
+
+# 前端本地依赖与缓存（保留 package-lock.json）
+web/node_modules/
+web/dist/
