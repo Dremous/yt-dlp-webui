@@ -22,7 +22,7 @@ on:
       - "v*"
 
 env:
-  IMAGE_NAME: ${{ github.repository }}   # 即 <owner>/<repo>
+  IMAGE_NAME: ${{ toLower(github.repository) }}   # Dremous/yt-dlp-webui -> dremous/yt-dlp-webui
 
 jobs:
   build:
