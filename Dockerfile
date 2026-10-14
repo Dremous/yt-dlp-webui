@@ -18,7 +18,7 @@ COPY web/ ./
 RUN npm run build
 
 # ---------- 阶段二：后端运行时 ----------
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
