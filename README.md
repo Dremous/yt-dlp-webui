@@ -21,7 +21,7 @@
 | 组件 | 说明 |
 |------|------|
 | 前端 | React 18 + HeroUI + Tailwind CSS + Vite |
-| 后端 | Python 3.11 + FastAPI + Uvicorn |
+| 后端 | Python 3.13 + FastAPI + Uvicorn |
 | 下载引擎 | yt-dlp（Python API，不锁版本） |
 | 容器 | 多阶段镜像（node 构建前端 → python 运行），内置 ffmpeg |
 | CI | GitHub Actions 定时构建并推送 GHCR |
