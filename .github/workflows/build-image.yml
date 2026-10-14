@@ -44,6 +44,5 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:latest
-            ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ github.sha }}
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ steps.image.outputs.DATE }}
             
