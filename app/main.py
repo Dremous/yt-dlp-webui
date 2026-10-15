@@ -63,8 +63,8 @@ def start_download(req: DownloadRequest):
 
 
 @app.get("/api/tasks")
-def list_tasks(limit: int = Query(30, ge=1, le=200)):
-    return manager.snapshot(limit)
+def list_tasks(limit: int = Query(30, ge=1, le=50)):
+    return {"total": manager.count(), "tasks": manager.snapshot(limit)}
 
 
 @app.post("/api/tasks/{task_id}/cancel")

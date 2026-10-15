@@ -50,7 +50,7 @@ FORMATS: Dict[str, dict] = {
 
 # 资源上限（防止无限增长 / 无节制并发）
 MAX_CONCURRENT = 5     # 最大并发下载数
-MAX_TASKS = 200        # 内存中保留的最大任务数
+MAX_TASKS = 50         # 内存中保留的最大任务记录数（正常手工下载几乎不会触顶，仅防脚本刷任务）
 
 # 下载中可能残留的临时/中间文件后缀，不视作最终产物（列表扫描时同样过滤）
 TMP_SUFFIXES = (
@@ -172,6 +172,11 @@ class DownloadManager:
         with self._lock:
             return self.tasks.get(task_id)
 
+    def count(self) -> int:
+        """当前内存中的任务总数（含已结束任务）。"""
+        with self._lock:
+            return len(self.tasks)
+
     # ------------------------------------------------------------------
     # 内部执行
     # ------------------------------------------------------------------
@@ -266,14 +271,14 @@ class DownloadManager:
         return newest.relative_to(self.download_dir).as_posix()
 
     def _trim_tasks(self) -> None:
-        """任务数超上限时清理：先清已完成/失败，仍超再取消并清最老的排队任务。"""
+        """任务数超上限时清理：先清已完成/失败/已取消，仍超再取消并清最老的排队任务。"""
         if len(self.tasks) < MAX_TASKS:
             return
-        # 第一优先：清理已完成/失败的最老任务
+        # 第一优先：清理已完成/失败/已取消的最老任务（cancelled 的线程已自查返回，删除安全）
         inactive = [
             (k, self.tasks[k].created)
             for k in self.tasks
-            if self.tasks[k].status in ("finished", "failed")
+            if self.tasks[k].status in ("finished", "failed", "cancelled")
         ]
         inactive.sort(key=lambda x: x[1])
         for k, _ in inactive:

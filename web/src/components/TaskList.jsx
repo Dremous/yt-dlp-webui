@@ -16,7 +16,7 @@ const STATE_META = {
   cancelled: { label: "已取消", color: "default" },
 };
 
-export default function TaskList({ tasks, onChanged }) {
+export default function TaskList({ tasks, onChanged, total }) {
   const shown = tasks.slice(0, 30);
 
   return (
@@ -24,18 +24,25 @@ export default function TaskList({ tasks, onChanged }) {
       <CardHeader className="px-5 pt-5 flex items-center justify-between">
         <h2 className="text-base font-semibold text-white">下载任务</h2>
         <Chip size="sm" variant="flat" color="primary">
-          {tasks.length}
+          {total}
         </Chip>
       </CardHeader>
       <CardBody className="px-5 pb-5">
         {shown.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-4">暂无任务</p>
         ) : (
-          <div className="flex flex-col gap-3">
-            {shown.map((t) => (
-              <TaskItem key={t.id} task={t} onChanged={onChanged} />
-            ))}
-          </div>
+          <>
+            <div className="flex flex-col gap-3">
+              {shown.map((t) => (
+                <TaskItem key={t.id} task={t} onChanged={onChanged} />
+              ))}
+            </div>
+            {total > shown.length && (
+              <p className="text-xs text-slate-500 mt-3">
+                仅显示最近 {shown.length} 条（共 {total}）
+              </p>
+            )}
+          </>
         )}
       </CardBody>
     </Card>

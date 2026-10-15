@@ -9,6 +9,7 @@ import FileList from "./components/FileList.jsx";
 export default function App() {
   const [formats, setFormats] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [taskTotal, setTaskTotal] = useState(0);
   const [files, setFiles] = useState([]);
   const [cookieOn, setCookieOn] = useState(false);
 
@@ -30,7 +31,10 @@ export default function App() {
     api
       .tasks(30) // 只拉最近 30 条，避免全量传输
       .then((data) => {
-        if (seq === tasksSeq.current) setTasks(data);
+        if (seq === tasksSeq.current) {
+          setTasks(data.tasks);
+          setTaskTotal(data.total);
+        }
       })
       .catch((e) => console.warn("加载任务失败", e));
   }, []);
@@ -77,7 +81,7 @@ export default function App() {
 
       <Spacer y={4} />
 
-      <TaskList tasks={tasks} onChanged={refreshTasks} />
+      <TaskList tasks={tasks} onChanged={refreshTasks} total={taskTotal} />
 
       <Spacer y={4} />
 
