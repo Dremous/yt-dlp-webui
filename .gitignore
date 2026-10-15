@@ -12,6 +12,7 @@ config/
 # 前端依赖与构建产物（构建产物会被 vite 输出到 app/static）
 web/node_modules/
 web/dist/
+app/static/
 
 # 环境变量
 .env
