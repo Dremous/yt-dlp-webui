@@ -1,7 +1,9 @@
 """下载管理器：基于 yt-dlp 的 Python API 实现后台下载任务。
 
-所有 URL 都通过 yt-dlp 的 Python API 传递（绝不使用 shell 拼接），
-从根上避免命令注入风险。
+设计要点：
+- 所有 URL 都通过 yt-dlp 的 Python API 传递（绝不使用 shell 拼接），避免命令注入。
+- 每个任务写入自己的子目录，产物按任务隔离，消除并发误判。
+- 用信号量限制最大并发，用上限清理完成任务，防止线程/内存无限增长。
 """
 
 import threading
@@ -44,6 +46,10 @@ FORMATS: Dict[str, dict] = {
     },
 }
 
+# 资源上限（防止无限增长 / 无节制并发）
+MAX_CONCURRENT = 5     # 最大并发下载数
+MAX_TASKS = 200        # 内存中保留的最大任务数
+
 
 class DownloadTask:
     """单个下载任务的状态。"""
@@ -57,7 +63,7 @@ class DownloadTask:
         self.speed: Optional[str] = None
         self.eta: Optional[str] = None
         self.title: Optional[str] = None
-        self.filename: Optional[str] = None
+        self.filename: Optional[str] = None  # 相对下载目录的路径（含任务子目录前缀）
         self.error: Optional[str] = None
         self.created: float = time.time()
 
@@ -90,6 +96,7 @@ class DownloadManager:
         self.cookie_file = Path(cookie_file) if cookie_file else None
         self.tasks: Dict[str, DownloadTask] = {}
         self._lock = threading.Lock()
+        self._slots = threading.BoundedSemaphore(MAX_CONCURRENT)
 
     # ------------------------------------------------------------------
     # Cookie 支持
@@ -127,6 +134,7 @@ class DownloadManager:
     def submit(self, url: str, fmt: str) -> DownloadTask:
         task = DownloadTask(uuid.uuid4().hex[:8], url, fmt)
         with self._lock:
+            self._trim_tasks()
             self.tasks[task.id] = task
         threading.Thread(target=self._run, args=(task,), daemon=True).start()
         return task
@@ -146,12 +154,21 @@ class DownloadManager:
     # 内部执行
     # ------------------------------------------------------------------
     def _run(self, task: DownloadTask) -> None:
-        # 记录任务开始前目录中已存在的文件，结束后 diff 出实际产物文件名
-        before = self._dir_files()
+        # 用信号量限制最大并发；排队任务在此等待空闲并发位
+        self._slots.acquire()
+        try:
+            self._download(task)
+        finally:
+            self._slots.release()
+
+    def _download(self, task: DownloadTask) -> None:
+        # 每个任务写入自己的子目录，产物互不干扰
+        task_dir = self.download_dir / task.id
+        task_dir.mkdir(parents=True, exist_ok=True)
 
         task.status = "downloading"
         opts = {
-            "outtmpl": str(self.download_dir / "%(title).100B [%(id)s].%(ext)s"),
+            "outtmpl": str(task_dir / "%(title).100B [%(id)s].%(ext)s"),
             "noplaylist": True,          # 只下载单个视频，不展开播放列表
             "noprogress": True,
             "quiet": True,
@@ -168,7 +185,7 @@ class DownloadManager:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(task.url, download=True)
             task.title = info.get("title")
-            task.filename = self._new_files(before)
+            task.filename = self._task_output(task_dir)
             task.status = "finished"
             task.progress = 100.0
             task.speed = None
@@ -176,6 +193,9 @@ class DownloadManager:
         except Exception as exc:  # noqa: BLE001 - 需要把任意下载异常反馈给前端
             task.status = "failed"
             task.error = str(exc)[:500]
+            task.speed = None
+            task.eta = None
+            task.progress = 0.0
 
     def _hook(self, data: dict, task: DownloadTask) -> None:
         if data["status"] == "downloading":
@@ -187,26 +207,27 @@ class DownloadManager:
             task.eta = data.get("_eta_str") or data.get("eta_str")
 
     # ------------------------------------------------------------------
-    # 文件 diff 辅助
+    # 产物定位 & 任务清理
     # ------------------------------------------------------------------
-    def _dir_files(self) -> Dict[str, float]:
-        """返回目录中 {文件名: 修改时间} 的映射。"""
-        return {
-            p.name: p.stat().st_mtime_ns
-            for p in self.download_dir.iterdir()
-            if p.is_file()
-        }
-
-    def _new_files(self, before: Dict[str, float]) -> Optional[str]:
-        """找出任务执行后新增或变化过的文件，返回最新一个。"""
-        after = self._dir_files()
-        candidates = []
-        for name in after:
-            # 新增，或 mtime 发生变化
-            if name not in before or after[name] != before[name]:
-                candidates.append(name)
-        if not candidates:
+    def _task_output(self, task_dir: Path) -> Optional[str]:
+        """返回任务子目录中最新的产物文件，相对下载目录的路径。"""
+        files = [p for p in task_dir.iterdir() if p.is_file()]
+        if not files:
             return None
-        # 返回修改时间最新的
-        newest = max(candidates, key=lambda n: after[n])
-        return newest
+        newest = max(files, key=lambda p: p.stat().st_mtime)
+        return newest.relative_to(self.download_dir).as_posix()
+
+    def _trim_tasks(self) -> None:
+        """任务数超过上限时，按创建时间移除最老的已完成/失败任务。"""
+        if len(self.tasks) < MAX_TASKS:
+            return
+        inactive = [
+            (k, self.tasks[k].created)
+            for k in self.tasks
+            if self.tasks[k].status in ("finished", "failed")
+        ]
+        inactive.sort(key=lambda x: x[1])
+        for k, _ in inactive:
+            del self.tasks[k]
+            if len(self.tasks) < MAX_TASKS:
+                break

@@ -15,5 +15,16 @@ export default defineConfig({
   build: {
     outDir: "../app/static",
     emptyOutDir: true,
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        // 拆包：将 react / heroui / framer-motion 独立成 chunk，减小首屏主包
+        manualChunks: {
+          "vendor-react": ["react", "react-dom"],
+          "vendor-heroui": ["@heroui/react"],
+          "vendor-motion": ["framer-motion"],
+        },
+      },
+    },
   },
 });

@@ -48,6 +48,10 @@ COPY --from=web-builder /app/app/static ./app/static
 
 EXPOSE 8080
 
+# 健康检查：curl 探活 API 端点
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD curl -fs http://127.0.0.1:8080/api/formats || exit 1
+
 # 卷：下载文件与 Cookie 持久化
 VOLUME /downloads /config
 

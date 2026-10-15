@@ -13,6 +13,7 @@
 - 静态前端挂载在 /
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -69,34 +70,51 @@ def list_tasks():
 @app.get("/api/files")
 def list_files():
     files = []
-    for p in sorted(DOWNLOAD_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+    root = DOWNLOAD_DIR.resolve()
+    # 递归扫描（每个任务在独立子目录中），返回相对路径
+    for p in sorted(DOWNLOAD_DIR.rglob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
         if p.is_file():
+            rel = p.relative_to(root).as_posix()
             files.append({
-                "name": p.name,
+                "name": rel,
                 "size": p.stat().st_size,
                 "mtime": int(p.stat().st_mtime),
             })
     return files
 
 
-@app.get("/files/{filename}")
+def _resolve_in_downloads(filename: str) -> Path:
+    """把用户提供的相对路径解析到下载目录内，杜绝路径穿越。"""
+    root = DOWNLOAD_DIR.resolve()
+    path = (DOWNLOAD_DIR / filename).resolve()
+    if not path.is_relative_to(root):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return path
+
+
+@app.get("/files/{filename:path}")
 def get_file(filename: str):
-    # 只取纯文件名，杜绝路径穿越
-    safe = Path(filename).name
-    path = DOWNLOAD_DIR / safe
+    path = _resolve_in_downloads(filename)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
-    return FileResponse(path, filename=safe)
+    return FileResponse(path, filename=path.name)
 
 
-@app.delete("/api/files/{filename}")
+@app.delete("/api/files/{filename:path}")
 def delete_file(filename: str):
-    safe = Path(filename).name
-    path = DOWNLOAD_DIR / safe
+    path = _resolve_in_downloads(filename)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
     path.unlink()
-    return {"ok": True, "deleted": safe}
+    # 若父目录是任务子目录且已空，一并清理
+    root = DOWNLOAD_DIR.resolve()
+    parent = path.parent
+    if parent != root and not any(parent.iterdir()):
+        try:
+            parent.rmdir()
+        except OSError:
+            pass
+    return {"ok": True, "deleted": path.name}
 
 
 # ---------------------------------------------------------------------------
@@ -113,10 +131,43 @@ async def upload_cookie(file: UploadFile):
         text = content.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="Cookie 文件必须是 UTF-8 文本")
-    # 极简校验：Netscape 头 或 JSON 结构，避免乱传
     stripped = text.lstrip()
-    if not (stripped.startswith("# Netscape HTTP Cookie File") or stripped.startswith("{")):
-        raise HTTPException(status_code=400, detail="无法识别的 Cookie 格式：需为 Netscape cookies.txt 或 JSON")
+
+    # Netscape 格式：以头部注释开头，每行数据需为制表符分隔的字段
+    if stripped.startswith("# Netscape HTTP Cookie File"):
+        data_lines = [ln for ln in text.splitlines()
+                      if ln.strip() and not ln.lstrip().startswith("#")]
+        for ln in data_lines:
+            fields = ln.rstrip("\n").split("\t")
+            if len(fields) < 5:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Netscape 格式错误：行字段不足 → {ln[:60]}",
+                )
+    # JSON 格式：数组或单个对象，每个元素含 name / domain / value
+    elif stripped.startswith(("{", "[")):
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Cookie JSON 解析失败")
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        if not isinstance(parsed, list) or not parsed:
+            raise HTTPException(status_code=400, detail="Cookie JSON 需为非空数组")
+        for item in parsed:
+            if not isinstance(item, dict) or not all(
+                k in item for k in ("name", "domain", "value")
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cookie JSON 项需包含 name / domain / value 字段",
+                )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="无法识别的 Cookie 格式：需为 Netscape cookies.txt 或 JSON",
+        )
+
     manager.save_cookie(content)
     return {"ok": True}
 
