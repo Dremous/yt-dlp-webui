@@ -77,7 +77,7 @@ export default function App() {
 
       <Spacer y={4} />
 
-      <TaskList tasks={tasks} />
+      <TaskList tasks={tasks} onChanged={refreshTasks} />
 
       <Spacer y={4} />
 

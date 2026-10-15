@@ -51,6 +51,12 @@ MAX_CONCURRENT = 5     # 最大并发下载数
 MAX_TASKS = 200        # 内存中保留的最大任务数
 
 
+class DownloadCancelled(Exception):
+    """下载被用户主动取消（或排队超限被清理）时抛出的内部信号。"""
+
+    pass
+
+
 class DownloadTask:
     """单个下载任务的状态。"""
 
@@ -162,6 +168,9 @@ class DownloadManager:
         # 用信号量限制最大并发；排队任务在此等待空闲并发位
         self._slots.acquire()
         try:
+            # 若排队期间被取消/清理，acquire 到后直接返回，避免孤儿下载
+            if task.status == "cancelled":
+                return
             self._download(task)
         finally:
             self._slots.release()
@@ -195,6 +204,12 @@ class DownloadManager:
             task.progress = 100.0
             task.speed = None
             task.eta = None
+        except DownloadCancelled:
+            # 用户主动取消：清空进度，标记已取消
+            task.status = "cancelled"
+            task.speed = None
+            task.eta = None
+            task.progress = 0.0
         except Exception as exc:  # noqa: BLE001 - 需要把任意下载异常反馈给前端
             task.status = "failed"
             task.error = str(exc)[:500]
@@ -203,6 +218,9 @@ class DownloadManager:
             task.progress = 0.0
 
     def _hook(self, data: dict, task: DownloadTask) -> None:
+        # 取消信号：一旦任务被标记为取消，立即终止 yt-dlp 下载
+        if task.status == "cancelled":
+            raise DownloadCancelled()
         if data["status"] == "downloading":
             total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
             downloaded = data.get("downloaded_bytes", 0)
@@ -214,18 +232,28 @@ class DownloadManager:
     # ------------------------------------------------------------------
     # 产物定位 & 任务清理
     # ------------------------------------------------------------------
+    # 下载中可能残留的临时/中间文件后缀，不视作最终产物
+    _TMP_SUFFIXES = (
+        ".part", ".ytdl", ".tmp", ".temp", ".webp",
+        ".jpg", ".png", ".description", ".info.json",
+    )
+
     def _task_output(self, task_dir: Path) -> Optional[str]:
-        """返回任务子目录中最新的产物文件，相对下载目录的路径。"""
-        files = [p for p in task_dir.iterdir() if p.is_file()]
+        """返回任务子目录中最新的成品文件（排除临时/中间文件），相对下载目录的路径。"""
+        files = [
+            p for p in task_dir.iterdir()
+            if p.is_file() and not p.name.endswith(self._TMP_SUFFIXES)
+        ]
         if not files:
             return None
         newest = max(files, key=lambda p: p.stat().st_mtime)
         return newest.relative_to(self.download_dir).as_posix()
 
     def _trim_tasks(self) -> None:
-        """任务数超过上限时，按创建时间移除最老的已完成/失败任务。"""
+        """任务数超上限时清理：先清已完成/失败，仍超再取消并清最老的排队任务。"""
         if len(self.tasks) < MAX_TASKS:
             return
+        # 第一优先：清理已完成/失败的最老任务
         inactive = [
             (k, self.tasks[k].created)
             for k in self.tasks
@@ -233,6 +261,18 @@ class DownloadManager:
         ]
         inactive.sort(key=lambda x: x[1])
         for k, _ in inactive:
+            del self.tasks[k]
+            if len(self.tasks) < MAX_TASKS:
+                return
+        # 仍超限：取消并清理最老的排队任务（线程 acquire 后自查返回，不产生孤儿下载）
+        queued = [
+            (k, self.tasks[k].created)
+            for k in self.tasks
+            if self.tasks[k].status == "queued"
+        ]
+        queued.sort(key=lambda x: x[1])
+        for k, _ in queued:
+            self.tasks[k].status = "cancelled"
             del self.tasks[k]
             if len(self.tasks) < MAX_TASKS:
                 break

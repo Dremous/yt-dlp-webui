@@ -67,19 +67,39 @@ def list_tasks():
     return manager.snapshot()
 
 
+@app.post("/api/tasks/{task_id}/cancel")
+def cancel_task(task_id: str):
+    task = manager.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.status in ("finished", "failed", "cancelled"):
+        raise HTTPException(status_code=400, detail="任务已结束，无法取消")
+    # queued：线程 acquire 后自查返回；downloading：进度 hook 检测后终止
+    task.status = "cancelled"
+    return {"ok": True, "id": task_id}
+
+
 @app.get("/api/files")
 def list_files():
     files = []
     root = DOWNLOAD_DIR.resolve()
     # 递归扫描（每个任务在独立子目录中），返回相对路径
-    for p in sorted(DOWNLOAD_DIR.rglob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
-        if p.is_file():
-            rel = p.relative_to(root).as_posix()
-            files.append({
-                "name": rel,
-                "size": p.stat().st_size,
-                "mtime": int(p.stat().st_mtime),
-            })
+    scanned = []
+    for p in DOWNLOAD_DIR.rglob("*"):
+        if not p.is_file():
+            continue
+        try:
+            st = p.stat()
+        except OSError:
+            continue  # 扫描期间文件被并发删除，跳过而非报错
+        scanned.append((p, st.st_mtime, st.st_size))
+    scanned.sort(key=lambda x: x[1], reverse=True)
+    for p, mtime, size in scanned:
+        files.append({
+            "name": p.relative_to(root).as_posix(),
+            "size": size,
+            "mtime": int(mtime),
+        })
     return files
 
 

@@ -13,9 +13,10 @@ const STATE_META = {
   downloading: { label: "下载中", color: "primary" },
   finished: { label: "已完成", color: "success" },
   failed: { label: "失败", color: "danger" },
+  cancelled: { label: "已取消", color: "default" },
 };
 
-export default function TaskList({ tasks }) {
+export default function TaskList({ tasks, onChanged }) {
   const shown = tasks.slice(0, 20);
 
   return (
@@ -32,7 +33,7 @@ export default function TaskList({ tasks }) {
         ) : (
           <div className="flex flex-col gap-3">
             {shown.map((t) => (
-              <TaskItem key={t.id} task={t} />
+              <TaskItem key={t.id} task={t} onChanged={onChanged} />
             ))}
           </div>
         )}
@@ -41,9 +42,29 @@ export default function TaskList({ tasks }) {
   );
 }
 
-function TaskItem({ task }) {
+function TaskItem({ task, onChanged }) {
   const meta = STATE_META[task.status] || { label: task.status, color: "default" };
   const title = task.title ? ` · ${task.title}` : "";
+
+  async function handleCancel() {
+    try {
+      await api.cancelTask(task.id);
+      onChanged();
+    } catch (e) {
+      window.alert("取消失败：" + e.message);
+    }
+  }
+
+  async function handleRetry() {
+    try {
+      await api.download(task.url, task.format);
+      onChanged();
+    } catch (e) {
+      window.alert("重试失败：" + e.message);
+    }
+  }
+
+  const canRetry = task.status === "failed" || task.status === "cancelled";
 
   return (
     <div className="p-4 rounded-xl bg-[#0d1322] border border-[#29324d] flex flex-col gap-3">
@@ -76,6 +97,16 @@ function TaskItem({ task }) {
           </>
         )}
         <span className="flex-1 truncate text-slate-300">{title}</span>
+        {task.status === "downloading" && (
+          <Button size="sm" color="warning" variant="light" onPress={handleCancel}>
+            取消
+          </Button>
+        )}
+        {canRetry && (
+          <Button size="sm" color="primary" variant="flat" onPress={handleRetry}>
+            重试
+          </Button>
+        )}
         {task.status === "finished" && task.filename && (
           <a href={`/files/${encodeURIComponent(task.filename)}`}>
             <Button size="sm" color="success" variant="flat">

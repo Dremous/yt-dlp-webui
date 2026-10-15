@@ -48,6 +48,9 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          # GitHub Actions 缓存，避免每次全量构建
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:latest
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ steps.image.outputs.DATE }}
