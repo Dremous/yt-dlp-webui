@@ -5,8 +5,8 @@
 - GET  /api/formats   可用输出格式
 - GET  /api/tasks     任务列表（前端轮询）
 - GET  /api/files     已下载文件列表
-- GET  /files/{name}  下载文件
-- DELETE /api/files/{name} 删除文件
+- GET  /files/{filename:path}  下载文件（相对路径，含任务子目录）
+- DELETE /api/files/{filename:path} 删除文件
 - POST /api/cookies   导入 Cookie（cookies.txt）
 - GET  /api/cookies/status  查询 Cookie 状态
 - DELETE /api/cookies 清除 Cookie

@@ -10,8 +10,9 @@ FROM node:20-alpine AS web-builder
 WORKDIR /app/web
 
 # 先拷贝依赖清单，利用 Docker 层缓存
+# 直接用 npm ci（lock 精确安装，不再回退 npm install 引入不一致；保留 audit）
 COPY web/package*.json ./
-RUN npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+RUN npm ci --no-fund
 
 # 拷贝源码并构建（vite 输出到 ../app/static）
 COPY web/ ./

@@ -92,6 +92,7 @@ docker run -d --name yt-dlp-webui \
 ```bash
 # 1) 后端
 pip install -r requirements.txt          # 需系统装有 ffmpeg
+pip install -U yt-dlp                     # yt-dlp 不在 requirements.txt（镜像内由 Dockerfile 安装 nightly）
 DOWNLOAD_DIR=/tmp/ytdl-downloads uvicorn app.main:app --reload --port 8080
 
 # 2) 前端（另开终端，构建产物输出到 app/static）
@@ -107,8 +108,8 @@ cd web && npm install && npm run dev      # 开发服务器 http://localhost:517
 | POST | `/api/download` | 提交下载任务，body: `{"url": "...", "format": "mp4"}` |
 | GET | `/api/tasks` | 任务列表（含进度） |
 | GET | `/api/files` | 已下载文件列表 |
-| GET | `/files/{name}` | 下载指定文件 |
-| DELETE | `/api/files/{name}` | 删除指定文件 |
+| GET | `/files/{filename:path}` | 下载指定文件（相对路径，含任务子目录） |
+| DELETE | `/api/files/{filename:path}` | 删除指定文件 |
 | POST | `/api/cookies` | 上传 Cookie 文件（multipart，字段 `file`） |
 | GET | `/api/cookies/status` | 查询 Cookie 状态 |
 | DELETE | `/api/cookies` | 清除 Cookie |

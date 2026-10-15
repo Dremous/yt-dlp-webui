@@ -106,11 +106,16 @@ class DownloadManager:
         return self.cookie_file is not None and self.cookie_file.is_file()
 
     def save_cookie(self, data: bytes) -> None:
-        """保存 Cookie 文件内容（供后端上传接口调用）。"""
+        """保存 Cookie 文件内容（供后端上传接口调用），并收紧文件权限。"""
         if self.cookie_file is None:
             raise ValueError("未配置 COOKIE_FILE，无法保存 Cookie")
         self.cookie_file.parent.mkdir(parents=True, exist_ok=True)
         self.cookie_file.write_bytes(data)
+        # Cookie 含敏感登录凭证，限制为本用户可读写
+        try:
+            self.cookie_file.chmod(0o600)
+        except OSError:
+            pass
 
     def remove_cookie(self) -> None:
         """删除已保存的 Cookie 文件。"""
