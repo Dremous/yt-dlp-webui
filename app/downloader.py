@@ -50,6 +50,12 @@ FORMATS: Dict[str, dict] = {
 MAX_CONCURRENT = 5     # 最大并发下载数
 MAX_TASKS = 200        # 内存中保留的最大任务数
 
+# 下载中可能残留的临时/中间文件后缀，不视作最终产物（列表扫描时同样过滤）
+TMP_SUFFIXES = (
+    ".part", ".ytdl", ".tmp", ".temp", ".webp",
+    ".jpg", ".png", ".description", ".info.json",
+)
+
 
 class DownloadCancelled(Exception):
     """下载被用户主动取消（或排队超限被清理）时抛出的内部信号。"""
@@ -233,16 +239,11 @@ class DownloadManager:
     # 产物定位 & 任务清理
     # ------------------------------------------------------------------
     # 下载中可能残留的临时/中间文件后缀，不视作最终产物
-    _TMP_SUFFIXES = (
-        ".part", ".ytdl", ".tmp", ".temp", ".webp",
-        ".jpg", ".png", ".description", ".info.json",
-    )
-
     def _task_output(self, task_dir: Path) -> Optional[str]:
         """返回任务子目录中最新的成品文件（排除临时/中间文件），相对下载目录的路径。"""
         files = [
             p for p in task_dir.iterdir()
-            if p.is_file() and not p.name.endswith(self._TMP_SUFFIXES)
+            if p.is_file() and not p.name.endswith(TMP_SUFFIXES)
         ]
         if not files:
             return None

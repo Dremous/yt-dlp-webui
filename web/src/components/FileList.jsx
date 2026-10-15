@@ -29,8 +29,12 @@ function formatTime(ts) {
 export default function FileList({ files, onChanged }) {
   async function handleDelete(name) {
     if (!window.confirm(`确定删除「${name}」？`)) return;
-    const ok = await api.deleteFile(name);
-    if (ok) onChanged();
+    try {
+      await api.deleteFile(name);
+      onChanged();
+    } catch (e) {
+      window.alert("删除失败：" + e.message);
+    }
   }
 
   return (

@@ -30,7 +30,7 @@ export const api = {
 
   deleteFile: (name) =>
     fetch(`/api/files/${encodeURIComponent(name)}`, { method: "DELETE" }).then(
-      (r) => r.ok
+      (r) => check(r, "删除失败")
     ),
 
   cookieStatus: () =>
@@ -45,5 +45,5 @@ export const api = {
   },
 
   deleteCookie: () =>
-    fetch("/api/cookies", { method: "DELETE" }).then((r) => r.ok),
+    fetch("/api/cookies", { method: "DELETE" }).then((r) => check(r, "清除失败")),
 };

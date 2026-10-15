@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .downloader import FORMATS, DownloadManager
+from .downloader import FORMATS, TMP_SUFFIXES, DownloadManager
 
 # ---------------------------------------------------------------------------
 # 下载目录与 Cookie 文件（容器内可通过环境变量覆盖）
@@ -83,16 +83,20 @@ def cancel_task(task_id: str):
 def list_files():
     files = []
     root = DOWNLOAD_DIR.resolve()
-    # 递归扫描（每个任务在独立子目录中），返回相对路径
+    # 递归扫描（每个任务在独立子目录中），返回相对路径；排除 .part 等临时文件
     scanned = []
-    for p in DOWNLOAD_DIR.rglob("*"):
-        if not p.is_file():
-            continue
-        try:
-            st = p.stat()
-        except OSError:
-            continue  # 扫描期间文件被并发删除，跳过而非报错
-        scanned.append((p, st.st_mtime, st.st_size))
+    try:
+        it = DOWNLOAD_DIR.rglob("*")
+        for p in it:
+            if not p.is_file() or p.name.endswith(TMP_SUFFIXES):
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue  # 扫描期间文件被并发删除，跳过而非报错
+            scanned.append((p, st.st_mtime, st.st_size))
+    except OSError:
+        pass  # rglob 遍历中目录被并发删除，整体容错
     scanned.sort(key=lambda x: x[1], reverse=True)
     for p, mtime, size in scanned:
         files.append({
