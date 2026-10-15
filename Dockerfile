@@ -6,7 +6,10 @@
 # ==========================================================================
 
 # ---------- 阶段一：前端构建 ----------
-FROM node:20-alpine AS web-builder
+# --platform=$BUILDPLATFORM：前端产物是纯静态 JS/HTML/CSS，与目标架构无关。
+# 在 runner 原生架构（amd64）上跑 npm ci / vite build，避免 arm64 交叉编译时
+# QEMU 模拟 node 极慢甚至卡死（此前 npm ci 卡在 [linux/arm64 web-builder] 的根因）。
+FROM --platform=$BUILDPLATFORM node:20-alpine AS web-builder
 WORKDIR /app/web
 
 # 先拷贝依赖清单，利用 Docker 层缓存
