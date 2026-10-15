@@ -40,11 +40,11 @@ docker run -d --name yt-dlp-webui \
   ghcr.io/dremous/yt-dlp-webui:latest
 ```
 
-### 方式二：本地 Docker Compose 构建
+### 方式二：Docker Compose 部署
 
 ```bash
 cd yt-dlp-webui
-docker compose up -d --build
+docker compose up -d
 ```
 
 ### 方式三：仅 Docker
@@ -77,7 +77,7 @@ docker run -d --name yt-dlp-webui \
 
 | 触发 | 时机 |
 |------|------|
-| `schedule` | 每周三 02:00 UTC（北京时间每周三 10:00） |
+| `schedule` | 每天 00:00 UTC（北京时间每天 00:00） |
 | `workflow_dispatch` | 在 Actions 页面手动点击 "Run workflow" |
 | `push` | 推送 `main` 分支或打 `v*` 标签 |
 

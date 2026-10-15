@@ -1,8 +1,7 @@
 services:
   yt-dlp-webui:
-    build: .
     container_name: yt-dlp-webui
-    image: yt-dlp-webui:latest
+    image: ghcr.io/dremous/yt-dlp-webui:latest
     ports:
       - "8080:8080"
     volumes:
