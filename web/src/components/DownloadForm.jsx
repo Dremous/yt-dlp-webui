@@ -44,7 +44,7 @@ export default function DownloadForm({ formats, onSubmit }) {
   }
 
   return (
-    <Card className="card-ui">
+    <Card>
       <CardHeader className="px-5 pt-5 flex items-center gap-2">
         <DownloadSimple
           size={18}

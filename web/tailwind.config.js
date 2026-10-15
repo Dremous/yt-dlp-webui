@@ -3,7 +3,11 @@ import { heroui } from "@heroui/react";
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
+    // 顶层安装（npm 提升 @heroui/theme 时）
     "./node_modules/@heroui/theme/dist/**/*.{js,ts,jsx,tsx}",
+    // 嵌套安装（npm 未提升时，如 node_modules/@heroui/react/node_modules/@heroui/theme）：
+    // 缺失此路径会导致 HeroUI 组件类（浮动 label 等）被 purge。
+    "./node_modules/@heroui/*/node_modules/@heroui/theme/dist/**/*.{js,ts,jsx,tsx}",
     "./src/**/*.{js,jsx,ts,tsx}",
   ],
   darkMode: "class",

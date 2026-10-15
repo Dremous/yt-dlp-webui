@@ -61,7 +61,7 @@ export default function CookiePanel({ active, onChanged }) {
   }
 
   return (
-    <Card className="card-ui">
+    <Card>
       <CardHeader className="px-5 pt-5 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Cookie size={18} weight="bold" className="text-emerald-400" aria-hidden="true" />

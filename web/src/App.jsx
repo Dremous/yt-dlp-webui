@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Divider } from "@heroui/react";
+import { Card, CardBody, Divider } from "@heroui/react";
 import { DownloadSimple } from "@phosphor-icons/react";
 import { api } from "./api.js";
 import { listContainer, cardItem, useMotionSafe } from "./lib/motion.js";
@@ -70,30 +70,31 @@ export default function App() {
       initial={motionSafe ? "hidden" : false}
       animate="show"
     >
-      {/* 头部：品牌标记 + 绿色氛围光 */}
-      <motion.header
-        variants={cardItem}
-        className="card-ui relative overflow-hidden mb-5 px-6 py-5 flex items-center justify-between"
-      >
-        <div
-          className="pointer-events-none absolute -top-16 -left-10 w-56 h-56 rounded-full bg-emerald-500/20 blur-3xl animate-glow-pulse"
-          aria-hidden="true"
-        />
-        <div className="relative flex items-center gap-3">
-          <span className="flex items-center justify-center w-11 h-11 rounded-xl bg-gradient-to-br from-emerald-400 to-green-600 text-slate-950 shadow-lg shadow-emerald-500/30">
-            <DownloadSimple size={22} weight="bold" aria-hidden="true" />
-          </span>
-          <div className="flex flex-col leading-tight">
-            <span className="text-xl font-bold tracking-tight text-white">
-              yt-dlp WebUI
+      {/* 头部：品牌标记 + 绿色氛围光（直接使用 HeroUI Card 深色主题） */}
+      <motion.div variants={cardItem} className="mb-5">
+        <Card className="relative overflow-hidden">
+          <div
+            className="pointer-events-none absolute -top-16 -left-10 w-56 h-56 rounded-full bg-emerald-500/20 blur-3xl animate-glow-pulse"
+            aria-hidden="true"
+          />
+          <CardBody className="relative px-6 py-5 flex flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="flex items-center justify-center w-11 h-11 shrink-0 rounded-xl bg-gradient-to-br from-emerald-400 to-green-600 text-slate-950 shadow-lg shadow-emerald-500/30">
+                <DownloadSimple size={22} weight="bold" aria-hidden="true" />
+              </span>
+              <div className="flex flex-col leading-tight min-w-0">
+                <span className="text-xl font-bold tracking-tight text-white">
+                  yt-dlp WebUI
+                </span>
+                <span className="text-xs text-slate-400">浏览器里的下载工作台</span>
+              </div>
+            </div>
+            <span className="hidden sm:block text-sm text-slate-400">
+              粘贴链接即可下载
             </span>
-            <span className="text-xs text-slate-400">浏览器里的下载工作台</span>
-          </div>
-        </div>
-        <span className="relative hidden sm:block text-sm text-slate-400">
-          粘贴链接即可下载
-        </span>
-      </motion.header>
+          </CardBody>
+        </Card>
+      </motion.div>
 
       <motion.div variants={cardItem}>
         <DownloadForm formats={formats} onSubmit={afterSubmit} />
