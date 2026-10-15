@@ -74,6 +74,7 @@ export default function CookiePanel({ active, onChanged }) {
         <div className="flex flex-wrap items-center gap-3">
           <Button
             size="sm"
+            disableRipple
             variant="bordered"
             color="primary"
             onPress={pickFile}
@@ -92,6 +93,7 @@ export default function CookiePanel({ active, onChanged }) {
           {active && (
             <Button
               size="sm"
+              disableRipple
               variant="light"
               color="danger"
               onPress={handleClear}

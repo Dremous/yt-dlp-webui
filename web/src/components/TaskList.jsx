@@ -113,18 +113,18 @@ function TaskItem({ task, onChanged }) {
         )}
         <span className="flex-1 truncate text-slate-300">{title}</span>
         {task.status === "downloading" && (
-          <Button size="sm" color="warning" variant="light" onPress={handleCancel} className="transition-ui">
+          <Button size="sm" disableRipple color="warning" variant="light" onPress={handleCancel} className="transition-ui">
             取消
           </Button>
         )}
         {canRetry && (
-          <Button size="sm" color="primary" variant="flat" onPress={handleRetry} className="transition-ui">
+          <Button size="sm" disableRipple color="primary" variant="flat" onPress={handleRetry} className="transition-ui">
             重试
           </Button>
         )}
         {task.status === "finished" && task.filename && (
           <a href={`/files/${encodeURIComponent(task.filename)}`}>
-            <Button size="sm" color="success" variant="flat" className="transition-ui">
+            <Button size="sm" disableRipple color="success" variant="flat" className="transition-ui">
               下载文件
             </Button>
           </a>

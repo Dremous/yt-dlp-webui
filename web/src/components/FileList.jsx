@@ -43,6 +43,7 @@ export default function FileList({ files, onChanged }) {
         <h2 className="text-base font-semibold text-white">已下载文件</h2>
         <Button
           size="sm"
+          disableRipple
           variant="flat"
           color="default"
           onPress={onChanged}
@@ -79,12 +80,13 @@ export default function FileList({ files, onChanged }) {
                   <TableCell>
                     <div className="flex gap-2 justify-end">
                       <a href={`/files/${encodeURIComponent(f.name)}`}>
-                        <Button size="sm" color="success" variant="flat" className="transition-ui">
+                        <Button size="sm" disableRipple color="success" variant="flat" className="transition-ui">
                           下载
                         </Button>
                       </a>
                       <Button
                         size="sm"
+                        disableRipple
                         color="danger"
                         variant="light"
                         onPress={() => handleDelete(f.name)}

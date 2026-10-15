@@ -62,6 +62,11 @@ export default function DownloadForm({ formats, onSubmit }) {
               className="sm:w-64"
               variant="bordered"
               isDisabled={loading}
+              classNames={{
+                popoverContent:
+                  "bg-[#0f1626] border border-[#232c48] rounded-xl shadow-2xl shadow-black/50",
+                listbox: "bg-transparent text-slate-200",
+              }}
             >
               {formats.map((f) => (
                 <SelectItem key={f.id}>{f.label}</SelectItem>
@@ -69,9 +74,10 @@ export default function DownloadForm({ formats, onSubmit }) {
             </Select>
             <Button
               type="submit"
+              disableRipple
               isLoading={loading}
               spinner={<Spinner size="sm" color="current" />}
-              className="sm:self-end font-semibold text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/30 transition-ui"
+              className="sm:self-end font-semibold text-white bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 shadow-lg shadow-indigo-600/30 transition-ui"
             >
               {loading ? "提交中" : "下载"}
             </Button>

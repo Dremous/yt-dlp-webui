@@ -41,10 +41,10 @@
     box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.6);
   }
 
-  /* 统一微交互过渡（按钮/hover） */
+  /* 统一微交互过渡（按钮/hover）；不含 transform，避免干扰组件内部动效 */
   .transition-ui {
     transition: background-color 200ms ease, border-color 200ms ease,
-      color 200ms ease, box-shadow 200ms ease, transform 200ms ease, opacity 200ms ease;
+      color 200ms ease, box-shadow 200ms ease, opacity 200ms ease;
   }
 
   /* 可点击元素统一指针 */
