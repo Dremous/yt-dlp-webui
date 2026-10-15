@@ -6,6 +6,7 @@
 - 用信号量限制最大并发，用上限清理完成任务，防止线程/内存无限增长。
 """
 
+import os
 import shutil
 import threading
 import time
@@ -119,16 +120,17 @@ class DownloadManager:
         return self.cookie_file is not None and self.cookie_file.is_file()
 
     def save_cookie(self, data: bytes) -> None:
-        """保存 Cookie 文件内容（供后端上传接口调用），并收紧文件权限。"""
+        """保存 Cookie 文件内容（供后端上传接口调用），并收紧文件权限。
+
+        采用「临时文件 + 原子替换」写入，避免并发下载读取到写了一半的 cookie。
+        """
         if self.cookie_file is None:
             raise ValueError("未配置 COOKIE_FILE，无法保存 Cookie")
         self.cookie_file.parent.mkdir(parents=True, exist_ok=True)
-        self.cookie_file.write_bytes(data)
-        # Cookie 含敏感登录凭证，限制为本用户可读写
-        try:
-            self.cookie_file.chmod(0o600)
-        except OSError:
-            pass
+        tmp = self.cookie_file.with_name(self.cookie_file.name + ".tmp")
+        tmp.write_bytes(data)
+        os.chmod(tmp, 0o600)  # Cookie 含敏感登录凭证，限制为本用户可读写
+        os.replace(tmp, self.cookie_file)  # 原子替换，读者不会读到半截内容
 
     def remove_cookie(self) -> None:
         """删除已保存的 Cookie 文件。"""

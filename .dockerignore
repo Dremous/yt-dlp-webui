@@ -11,3 +11,6 @@ config/
 # 前端本地依赖与缓存（保留 package-lock.json）
 web/node_modules/
 web/dist/
+
+# 前端构建产物（阶段二由 COPY --from 提供，避免本地旧产物进上下文）
+app/static/
