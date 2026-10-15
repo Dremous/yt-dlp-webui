@@ -18,7 +18,7 @@ COPY web/ ./
 RUN npm run build
 
 # ---------- 阶段二：后端运行时 ----------
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -39,7 +39,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # yt-dlp：每次构建从 GitHub nightly-builds 拉取最新 nightly 源码安装
-# （模块名仍为 yt_dlp，代码零改动；配合 CI 定时重建实现 nightly 自动跟随）
 RUN pip install --no-cache-dir --upgrade \
     "yt-dlp @ https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp.tar.gz"
 

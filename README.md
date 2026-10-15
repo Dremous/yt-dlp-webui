@@ -21,7 +21,7 @@
 | 组件 | 说明 |
 |------|------|
 | 前端 | React 18 + HeroUI + Tailwind CSS + Vite |
-| 后端 | Python 3.11 + FastAPI + Uvicorn |
+| 后端 | Python 3.13 + FastAPI + Uvicorn |
 | 下载引擎 | yt-dlp（Python API，每次构建拉取 nightly） |
 | 容器 | 多阶段镜像（node 构建前端 → python 运行），内置 ffmpeg |
 | CI | GitHub Actions 定时构建并推送 GHCR |
@@ -33,12 +33,11 @@
 在 GitHub Actions 中配置好 workflow 后（见下文），镜像会定期推送到 GHCR：
 
 ```bash
-# 替换 <your-account> 为你的 GitHub 用户名，<your-repo> 为仓库名
 docker run -d --name yt-dlp-webui \
   -p 8080:8080 \
   -v "$PWD/downloads:/downloads" \
   -v "$PWD/config:/config" \
-  ghcr.io/<your-account>/<your-repo>:latest
+  ghcr.io/dremous/yt-dlp-webui:latest
 ```
 
 ### 方式二：本地 Docker Compose 构建

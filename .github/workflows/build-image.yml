@@ -1,19 +1,8 @@
-# ==========================================================================
-# 定期拉取新版 yt-dlp 并自动构建 / 推送镜像到 GHCR
-#
-# 触发方式：
-#   1. 定时（schedule） 每周三 02:00 UTC（北京时间每周三 10:00）
-#   2. 手动（workflow_dispatch） 在 Actions 页面点 "Run workflow"
-#   3. 推送 main 分支 / 打 v* 标签
-#
-# yt-dlp 在 requirements.txt 中不锁版本，因此每次构建都会拉取最新版，
-# 配合定时重建即可实现"自动跟随新版"。
-# ==========================================================================
 name: Build & Push Image
 
 on:
   schedule:
-    - cron: "0 2 * * 3"          # 每周三 02:00 UTC
+    - cron: "0 0 * * *"          # 每天 00:00 UTC
   workflow_dispatch:              # 支持手动触发
   push:
     branches:
@@ -21,9 +10,6 @@ on:
     tags:
       - "v*"
 
-# GHCR/Docker 标签仓库名必须全小写。
-# 为避免依赖表达式函数（不同解析器支持不一致），改在 shell 层用 bash 参数展开 ${VAR,,} 转小写，
-# 再通过 step 输出 (GITHUB_OUTPUT) 供后续步骤引用 —— 任何环境都兼容。
 
 jobs:
   build:
@@ -36,12 +22,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 计算全小写镜像名与构建日期（shell 层求值，避免在 tags 里写 shell 命令）
       - name: Compute image name and date
         id: image
         run: |
           echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
           echo "DATE=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -50,6 +36,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -57,8 +46,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:latest
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ steps.image.outputs.DATE }}
-            ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ github.run_number }}
+            ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ steps.image.outputs.DATE }}-${{ steps.image.outputs.SHORT_SHA }}
