@@ -35,20 +35,20 @@ export default function DownloadForm({ formats, onSubmit }) {
   }
 
   return (
-    <Card className="bg-[#161b2d] border border-[#29324d]">
+    <Card className="card-ui">
       <CardHeader className="px-5 pt-5">
         <h2 className="text-base font-semibold text-white">下载新内容</h2>
       </CardHeader>
       <CardBody className="px-5 pb-5">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
             <Input
               isRequired
               label="链接"
               placeholder="https://www.youtube.com/watch?v=..."
               value={url}
               onValueChange={setUrl}
-              className="flex-1"
+              className="flex-1 font-mono-ui"
               variant="bordered"
               isDisabled={loading}
             />
@@ -69,10 +69,9 @@ export default function DownloadForm({ formats, onSubmit }) {
             </Select>
             <Button
               type="submit"
-              color="primary"
               isLoading={loading}
               spinner={<Spinner size="sm" color="current" />}
-              className="sm:self-end font-semibold"
+              className="sm:self-end font-semibold text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/30 transition-ui"
             >
               {loading ? "提交中" : "下载"}
             </Button>

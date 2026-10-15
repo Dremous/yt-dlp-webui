@@ -52,7 +52,7 @@ export default function CookiePanel({ active, onChanged }) {
   }
 
   return (
-    <Card className="bg-[#161b2d] border border-[#29324d]">
+    <Card className="card-ui">
       <CardHeader className="px-5 pt-5 flex items-center justify-between">
         <h2 className="text-base font-semibold text-white">登录 Cookie</h2>
         <Chip
@@ -78,6 +78,7 @@ export default function CookiePanel({ active, onChanged }) {
             color="primary"
             onPress={pickFile}
             isDisabled={uploading || busy}
+            className="text-indigo-300 border-indigo-400/60 hover:border-indigo-300 transition-ui"
             startContent={
               uploading ? (
                 <Spinner size="sm" color="current" />
@@ -95,6 +96,7 @@ export default function CookiePanel({ active, onChanged }) {
               color="danger"
               onPress={handleClear}
               isDisabled={uploading || busy}
+              className="transition-ui"
             >
               清除
             </Button>

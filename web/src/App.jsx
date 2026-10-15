@@ -61,13 +61,15 @@ export default function App() {
 
   return (
     <>
-      <Card className="mb-4 bg-[#161b2d] border border-[#29324d]">
+      <Card className="mb-5 card-ui">
         <CardBody className="flex flex-row items-center justify-between px-6 py-5">
           <div className="flex items-center gap-3">
-            <span className="w-10 h-10 rounded-xl bg-blue-500 flex items-center justify-center text-lg">
+            <span className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-lg shadow-lg shadow-indigo-500/30">
               ▶
             </span>
-            <span className="text-xl font-bold text-white">yt-dlp WebUI</span>
+            <span className="text-xl font-bold tracking-tight text-white">
+              yt-dlp WebUI
+            </span>
           </div>
           <span className="text-sm text-slate-400">粘贴链接即可下载</span>
         </CardBody>

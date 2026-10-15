@@ -38,10 +38,16 @@ export default function FileList({ files, onChanged }) {
   }
 
   return (
-    <Card className="bg-[#161b2d] border border-[#29324d]">
+    <Card className="card-ui">
       <CardHeader className="px-5 pt-5 flex items-center justify-between">
         <h2 className="text-base font-semibold text-white">已下载文件</h2>
-        <Button size="sm" variant="flat" color="default" onPress={onChanged}>
+        <Button
+          size="sm"
+          variant="flat"
+          color="default"
+          onPress={onChanged}
+          className="transition-ui"
+        >
           ↻ 刷新
         </Button>
       </CardHeader>
@@ -73,7 +79,7 @@ export default function FileList({ files, onChanged }) {
                   <TableCell>
                     <div className="flex gap-2 justify-end">
                       <a href={`/files/${encodeURIComponent(f.name)}`}>
-                        <Button size="sm" color="success" variant="flat">
+                        <Button size="sm" color="success" variant="flat" className="transition-ui">
                           下载
                         </Button>
                       </a>
@@ -82,6 +88,7 @@ export default function FileList({ files, onChanged }) {
                         color="danger"
                         variant="light"
                         onPress={() => handleDelete(f.name)}
+                        className="transition-ui"
                       >
                         删除
                       </Button>

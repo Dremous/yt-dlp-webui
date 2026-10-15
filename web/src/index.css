@@ -1,12 +1,82 @@
+@import url("https://fonts.googleapis.com/css2?family=Fira+Sans:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-body {
-  margin: 0;
-  min-height: 100vh;
-  background: #0b0f19;
-  color: #e2e8f0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "PingFang SC", "Microsoft YaHei", sans-serif;
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    /* 深色 + 顶部靛蓝氛围光，避免纯黑死板 */
+    background:
+      radial-gradient(1200px 600px at 20% -10%, rgba(99, 102, 241, 0.12), transparent 60%),
+      linear-gradient(180deg, #0d1220 0%, #0a0e18 100%);
+    background-attachment: fixed;
+    color: #e2e8f0;
+    font-family: "Fira Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+      Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* 等宽字体：用于 URL / 技术内容 */
+  .font-mono-ui {
+    font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  /* 统一卡片基类：柔和阴影 + 平滑边框过渡，修复 hover 突兀 */
+  .card-ui {
+    background: #131a2c;
+    border: 1px solid #232c48;
+    border-radius: 1rem;
+    box-shadow: 0 12px 32px -14px rgba(0, 0, 0, 0.55);
+    transition: border-color 200ms ease, box-shadow 200ms ease, transform 200ms ease;
+  }
+  .card-ui:hover {
+    border-color: rgba(99, 102, 241, 0.4);
+    box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.6);
+  }
+
+  /* 统一微交互过渡（按钮/hover） */
+  .transition-ui {
+    transition: background-color 200ms ease, border-color 200ms ease,
+      color 200ms ease, box-shadow 200ms ease, transform 200ms ease, opacity 200ms ease;
+  }
+
+  /* 可点击元素统一指针 */
+  button,
+  [role="button"],
+  a,
+  [role="tab"] {
+    cursor: pointer;
+  }
+
+  /* 滚动条（可选，深色适配） */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2a3450;
+    border-radius: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* 尊重系统"减弱动效"：修复动画错乱/闪烁的关键 */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
