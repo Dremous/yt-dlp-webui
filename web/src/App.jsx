@@ -28,7 +28,7 @@ export default function App() {
   const refreshTasks = useCallback(() => {
     const seq = ++tasksSeq.current;
     api
-      .tasks()
+      .tasks(30) // 只拉最近 30 条，避免全量传输
       .then((data) => {
         if (seq === tasksSeq.current) setTasks(data);
       })

@@ -17,7 +17,7 @@ import json
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -37,7 +37,7 @@ app = FastAPI(title="yt-dlp WebUI", version="1.0.0")
 
 
 class DownloadRequest(BaseModel):
-    url: str = Field(..., description="视频 / 音频 URL")
+    url: str = Field(..., max_length=2048, description="视频 / 音频 URL")
     format: str = Field("mp4", description="输出格式：mp4 / best / mp3")
 
 
@@ -63,8 +63,8 @@ def start_download(req: DownloadRequest):
 
 
 @app.get("/api/tasks")
-def list_tasks():
-    return manager.snapshot()
+def list_tasks(limit: int = Query(30, ge=1, le=200)):
+    return manager.snapshot(limit)
 
 
 @app.post("/api/tasks/{task_id}/cancel")

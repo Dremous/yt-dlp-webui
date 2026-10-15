@@ -6,6 +6,7 @@
 - 用信号量限制最大并发，用上限清理完成任务，防止线程/内存无限增长。
 """
 
+import shutil
 import threading
 import time
 import uuid
@@ -156,11 +157,13 @@ class DownloadManager:
         threading.Thread(target=self._run, args=(task,), daemon=True).start()
         return task
 
-    def snapshot(self) -> List[dict]:
-        """返回所有任务的可序列化快照（按创建时间倒序）。"""
+    def snapshot(self, limit: Optional[int] = None) -> List[dict]:
+        """返回所有任务的可序列化快照（按创建时间倒序）。limit 可限制返回条数。"""
         with self._lock:
             items = [t.to_dict() for t in self.tasks.values()]
         items.sort(key=lambda d: d["created"], reverse=True)
+        if limit is not None:
+            items = items[:limit]
         return items
 
     def get(self, task_id: str) -> Optional[DownloadTask]:
@@ -194,6 +197,8 @@ class DownloadManager:
             "quiet": True,
             "no_warnings": True,
             "progress_hooks": [lambda d: self._hook(d, task)],
+            # 后期阶段（转码/合并）也会回调，保证取消在 postprocessing 也能生效
+            "postprocessor_hooks": [lambda d: self._hook(d, task)],
             **FORMATS[task.format]["options"],
         }
 
@@ -211,17 +216,24 @@ class DownloadManager:
             task.speed = None
             task.eta = None
         except DownloadCancelled:
-            # 用户主动取消：清空进度，标记已取消
+            # 用户主动取消：清空进度，标记已取消，并清理任务目录（含 .part 残留）
             task.status = "cancelled"
             task.speed = None
             task.eta = None
             task.progress = 0.0
+            shutil.rmtree(task_dir, ignore_errors=True)
         except Exception as exc:  # noqa: BLE001 - 需要把任意下载异常反馈给前端
             task.status = "failed"
             task.error = str(exc)[:500]
             task.speed = None
             task.eta = None
             task.progress = 0.0
+            # 失败：仅清理空目录（保留可能的中间文件供排查/重试）
+            try:
+                if not any(task_dir.iterdir()):
+                    task_dir.rmdir()
+            except OSError:
+                pass
 
     def _hook(self, data: dict, task: DownloadTask) -> None:
         # 取消信号：一旦任务被标记为取消，立即终止 yt-dlp 下载

@@ -19,7 +19,10 @@ export const api = {
       body: JSON.stringify({ url, format }),
     }).then((r) => check(r, "下载失败")),
 
-  tasks: () => fetch("/api/tasks").then((r) => check(r, "加载任务失败")),
+  tasks: (limit) =>
+    fetch(`/api/tasks${limit ? `?limit=${limit}` : ""}`).then((r) =>
+      check(r, "加载任务失败")
+    ),
 
   files: () => fetch("/api/files").then((r) => check(r, "加载文件失败")),
 

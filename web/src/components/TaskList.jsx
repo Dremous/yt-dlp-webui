@@ -17,7 +17,7 @@ const STATE_META = {
 };
 
 export default function TaskList({ tasks, onChanged }) {
-  const shown = tasks.slice(0, 20);
+  const shown = tasks.slice(0, 30);
 
   return (
     <Card className="bg-[#161b2d] border border-[#29324d]">
