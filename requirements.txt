@@ -1,4 +1,4 @@
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
-# yt-dlp 不锁版本：每次构建都拉取最新版，配合 GitHub Actions 定时重建实现自动更新
-yt-dlp
+# yt-dlp 已改为每次构建时从 GitHub nightly-builds 拉取最新 nightly 源码安装，
+# 见 Dockerfile（此处不再列出，避免与 PyPI stable 冲突）

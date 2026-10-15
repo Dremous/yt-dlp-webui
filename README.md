@@ -3,7 +3,7 @@
 一个自带 Web 界面的 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 下载服务，前端基于 **HeroUI（React）** 构建。
 在浏览器里粘贴链接即可下载视频 / 音频，支持实时进度、后台并发任务、**登录 Cookie 导入**和已下载文件管理。
 
-可通过 **GitHub Actions 定时自动构建最新版 yt-dlp 镜像**并推送到 GitHub Container Registry（GHCR）。
+可通过 **GitHub Actions 定时自动构建最新 yt-dlp nightly 镜像**并推送到 GitHub Container Registry（GHCR）。
 
 ## 特性
 
@@ -14,15 +14,15 @@
 - **文件管理**：在网页里直接下载 / 删除已下载文件
 - **登录 Cookie 导入**：上传 `cookies.txt`（浏览器插件导出），用于下载私享 / 会员 / 年龄受限内容
 - **安全设计**：URL 全部走 yt-dlp Python API（无 shell 拼接），文件名做了路径穿越防护与 HTML 转义
-- **自动更新**：yt-dlp 不锁版本，配合 GitHub Actions 定时重建，始终跟随最新版
+- **自动更新**：yt-dlp 每次构建从 GitHub nightly-builds 拉取最新 nightly，配合定时重建始终跟随最新开发版
 
 ## 技术栈
 
 | 组件 | 说明 |
 |------|------|
 | 前端 | React 18 + HeroUI + Tailwind CSS + Vite |
-| 后端 | Python 3.13 + FastAPI + Uvicorn |
-| 下载引擎 | yt-dlp（Python API，不锁版本） |
+| 后端 | Python 3.11 + FastAPI + Uvicorn |
+| 下载引擎 | yt-dlp（Python API，每次构建拉取 nightly） |
 | 容器 | 多阶段镜像（node 构建前端 → python 运行），内置 ffmpeg |
 | CI | GitHub Actions 定时构建并推送 GHCR |
 
@@ -33,11 +33,12 @@
 在 GitHub Actions 中配置好 workflow 后（见下文），镜像会定期推送到 GHCR：
 
 ```bash
+# 替换 <your-account> 为你的 GitHub 用户名，<your-repo> 为仓库名
 docker run -d --name yt-dlp-webui \
   -p 8080:8080 \
   -v "$PWD/downloads:/downloads" \
   -v "$PWD/config:/config" \
-  ghcr.io/dremous/yt-dlp-webui>:latest
+  ghcr.io/<your-account>/<your-repo>:latest
 ```
 
 ### 方式二：本地 Docker Compose 构建
@@ -81,7 +82,7 @@ docker run -d --name yt-dlp-webui \
 | `workflow_dispatch` | 在 Actions 页面手动点击 "Run workflow" |
 | `push` | 推送 `main` 分支或打 `v*` 标签 |
 
-构建时 `pip install yt-dlp`（不锁版本）始终拉取最新版，因此每次构建的镜像都内置最新 yt-dlp。
+构建时从 GitHub `yt-dlp-nightly-builds` 源码安装 `yt-dlp`（模块名仍为 `yt_dlp`，代码零改动），因此每次构建的镜像都内置最新 nightly 构建。
 产物推送到 **GHCR**，标签为 `latest` 和 `run_number`（如 `ghcr.io/<owner>/<repo>:latest`）。
 
 > 前置设置：GitHub 仓库 `Settings → Packages` 中启用 GHCR；首次使用时需为镜像设置可见性。
@@ -127,7 +128,7 @@ cd web && npm install && npm run dev      # 开发服务器 http://localhost:517
 .
 ├── Dockerfile                    # 多阶段构建（node 前端 → python 后端）
 ├── docker-compose.yml            # Compose 编排（downloads + config 卷）
-├── requirements.txt              # Python 依赖（yt-dlp 不锁版本）
+├── requirements.txt              # Python 依赖（yt-dlp 改由 Dockerfile 装 nightly）
 ├── .github/workflows/
 │   └── build-image.yml           # 定时自动构建并推送 GHCR
 ├── web/                          # 前端源码（React + HeroUI + Vite）
