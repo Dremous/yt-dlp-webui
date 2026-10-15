@@ -17,6 +17,10 @@ app/static/
 # 环境变量
 .env
 
+# IDE / 编辑器
+.idea/
+
 # 交付物 / 工具临时目录
 yt-dlp-webui.zip
 .tmp-tool-results/
+/AGENTS.md

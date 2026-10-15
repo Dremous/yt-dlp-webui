@@ -1,23 +1,39 @@
-@import url("https://fonts.googleapis.com/css2?family=Fira+Sans:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* 语义色令牌（与 tailwind.config.js 的 HeroUI dark 主题保持一致） */
+    --bg: #0f172a;
+    --bg-deep: #0a0f1c;
+    --card: #1b2336;
+    --surface: #131c2e;
+    --border: #2a3450;
+    --border-strong: #3b4666;
+    --fg: #f8fafc;
+    --muted-fg: #94a3b8;
+    --primary: #22c55e;
+    --danger: #ef4444;
+  }
+
   html {
     scroll-behavior: smooth;
   }
+
   body {
     margin: 0;
     min-height: 100vh;
-    /* 深色 + 顶部靛蓝氛围光，避免纯黑死板 */
+    /* 深色 + 顶部绿色氛围光，保持 OLED 的纯净黑底 */
     background:
-      radial-gradient(1200px 600px at 20% -10%, rgba(99, 102, 241, 0.12), transparent 60%),
-      linear-gradient(180deg, #0d1220 0%, #0a0e18 100%);
+      radial-gradient(1100px 560px at 18% -12%, rgba(34, 197, 94, 0.12), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(16, 185, 129, 0.06), transparent 55%),
+      linear-gradient(180deg, #0d1524 0%, #0a0f1c 100%);
     background-attachment: fixed;
-    color: #e2e8f0;
-    font-family: "Fira Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    color: var(--fg);
+    font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
       Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
@@ -25,20 +41,20 @@
 
   /* 等宽字体：用于 URL / 技术内容 */
   .font-mono-ui {
-    font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
-  /* 统一卡片基类：柔和阴影 + 平滑边框过渡，修复 hover 突兀 */
+  /* 统一卡片基类：深色面板 + 平滑边框/阴影过渡 */
   .card-ui {
-    background: #131a2c;
-    border: 1px solid #232c48;
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 1rem;
-    box-shadow: 0 12px 32px -14px rgba(0, 0, 0, 0.55);
-    transition: border-color 200ms ease, box-shadow 200ms ease, transform 200ms ease;
+    box-shadow: 0 12px 32px -16px rgba(0, 0, 0, 0.6);
+    transition: border-color 220ms ease, box-shadow 220ms ease;
   }
   .card-ui:hover {
-    border-color: rgba(99, 102, 241, 0.4);
-    box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.6);
+    border-color: rgba(34, 197, 94, 0.38);
+    box-shadow: 0 18px 44px -18px rgba(34, 197, 94, 0.22);
   }
 
   /* 统一微交互过渡（按钮/hover）；不含 transform，避免干扰组件内部动效 */
@@ -55,20 +71,30 @@
     cursor: pointer;
   }
 
-  /* 滚动条（可选，深色适配） */
+  /* 键盘焦点可见环（可访问性） */
+  :focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  /* 滚动条（深色适配） */
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
   }
   ::-webkit-scrollbar-thumb {
-    background: #2a3450;
+    background: #26304a;
     border-radius: 8px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #33405f;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
 
-  /* 尊重系统"减弱动效"：修复动画错乱/闪烁的关键 */
+  /* 尊重系统"减弱动效"：动画/过渡全部降为瞬时 */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
