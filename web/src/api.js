@@ -5,7 +5,12 @@ const json = (res) => res.json().catch(() => ({}));
 // 统一检查响应状态：非 2xx 时抛出后端 detail（或默认消息），避免前端拿到无效数据崩溃
 const check = async (res, msg) => {
   const data = await json(res);
-  if (!res.ok) throw new Error(data.detail || msg);
+  if (!res.ok) {
+    // pydantic 校验失败（如 URL 超长）的 detail 是数组，取首条 msg；否则为字符串
+    const detail = data.detail;
+    const detailMsg = Array.isArray(detail) ? detail[0]?.msg : detail;
+    throw new Error(detailMsg || msg);
+  }
   return data;
 };
 

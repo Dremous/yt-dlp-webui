@@ -209,7 +209,7 @@ class DownloadManager:
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(task.url, download=True)
-            task.title = info.get("title")
+            task.title = (info or {}).get("title")
             task.filename = self._task_output(task_dir)
             task.status = "finished"
             task.progress = 100.0
@@ -239,7 +239,8 @@ class DownloadManager:
         # 取消信号：一旦任务被标记为取消，立即终止 yt-dlp 下载
         if task.status == "cancelled":
             raise DownloadCancelled()
-        if data["status"] == "downloading":
+        # progress / postprocessor 回调结构不同，用 .get 防御缺键
+        if data.get("status") == "downloading":
             total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
             downloaded = data.get("downloaded_bytes", 0)
             if total:

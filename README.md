@@ -106,7 +106,8 @@ cd web && npm install && npm run dev      # 开发服务器 http://localhost:517
 | GET | `/` | Web 界面 |
 | GET | `/api/formats` | 可用输出格式 |
 | POST | `/api/download` | 提交下载任务，body: `{"url": "...", "format": "mp4"}` |
-| GET | `/api/tasks` | 任务列表（含进度） |
+| GET | `/api/tasks?limit=N` | 任务列表（含进度；可选 limit 限制条数，默认 30，上限 200） |
+| POST | `/api/tasks/{task_id}/cancel` | 取消排队/下载中的任务（失败/已取消任务不可取消） |
 | GET | `/api/files` | 已下载文件列表 |
 | GET | `/files/{filename:path}` | 下载指定文件（相对路径，含任务子目录） |
 | DELETE | `/api/files/{filename:path}` | 删除指定文件 |

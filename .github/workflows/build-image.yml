@@ -55,3 +55,16 @@ jobs:
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:latest
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ steps.image.outputs.DATE }}
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ steps.image.outputs.DATE }}-${{ steps.image.outputs.SHORT_SHA }}
+
+      - name: 构建失败通知
+        if: failure()
+        env:
+          # 可选：配置仓库 secret WEBHOOK_URL（飞书/企业微信/钉钉机器人地址）即可推送失败告警
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+        run: |
+          echo "::error::yt-dlp-webui 镜像构建失败（run #${{ github.run_number }}）"
+          if [ -n "$WEBHOOK_URL" ]; then
+            curl -fsS -X POST "$WEBHOOK_URL" \
+              -H 'Content-Type: application/json' \
+              -d "{\"msg_type\":\"text\",\"content\":{\"text\":\"yt-dlp-webui 镜像构建失败 run#${{ github.run_number }}\"}}" || true
+          fi
