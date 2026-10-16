@@ -77,7 +77,7 @@ docker run -d --name yt-dlp-webui \
 
 | 触发 | 时机 |
 |------|------|
-| `schedule` | 每天 00:00 UTC（北京时间每天 00:00） |
+| `schedule` | 每周末 00:00 UTC（北京时间每周末 00:00） |
 | `workflow_dispatch` | 在 Actions 页面手动点击 "Run workflow" |
 | `push` | 推送 `main` 分支或打 `v*` 标签 |
 
