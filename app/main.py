@@ -10,6 +10,7 @@
 - POST /api/cookies   导入 Cookie（cookies.txt）
 - GET  /api/cookies/status  查询 Cookie 状态
 - DELETE /api/cookies 清除 Cookie
+- GET  /api/about     应用信息（版本 / yt-dlp 版本 / 作者）
 - 静态前端挂载在 /
 """
 
@@ -17,12 +18,16 @@ import json
 import os
 from pathlib import Path
 
+import yt_dlp
 from fastapi import FastAPI, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .downloader import FORMATS, TMP_SUFFIXES, DownloadManager
+
+# 镜像标签版本：Docker 构建时由 workflow 注入（DATE-SHORT_SHA），本地开发回退为 dev
+APP_VERSION = os.environ.get("APP_VERSION", "dev")
 
 # ---------------------------------------------------------------------------
 # 下载目录与 Cookie 文件（容器内可通过环境变量覆盖）
@@ -205,6 +210,20 @@ def cookie_status():
 def delete_cookie():
     manager.remove_cookie()
     return {"ok": True, "deleted": True}
+
+
+# ---------------------------------------------------------------------------
+# 应用信息（「关于」界面数据来源）
+# ---------------------------------------------------------------------------
+@app.get("/api/about")
+def about():
+    return {
+        "name": "yt-dlp WebUI",
+        "version": APP_VERSION,                    # 镜像标签版本（如 20261016-abc1234）
+        "yt_dlp_version": yt_dlp.version.__version__,
+        "author": "Dremous",
+        "repo": "https://github.com/Dremous/yt-dlp-webui",
+    }
 
 
 # ---------------------------------------------------------------------------

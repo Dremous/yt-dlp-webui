@@ -29,6 +29,10 @@ ENV PYTHONUNBUFFERED=1 \
     DOWNLOAD_DIR=/downloads \
     COOKIE_FILE=/config/cookies.txt
 
+# 镜像标签版本（构建时由 workflow 注入 DATE-SHORT_SHA），供「关于」界面显示
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+
 # ffmpeg：用于视频合并与音频转码（mp3 提取必需）
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \

@@ -8,6 +8,7 @@ import DownloadForm from "./components/DownloadForm.jsx";
 import CookiePanel from "./components/CookiePanel.jsx";
 import TaskList from "./components/TaskList.jsx";
 import FileList from "./components/FileList.jsx";
+import AboutButton from "./components/AboutButton.jsx";
 
 export default function App() {
   const [formats, setFormats] = useState([]);
@@ -15,6 +16,7 @@ export default function App() {
   const [taskTotal, setTaskTotal] = useState(0);
   const [files, setFiles] = useState([]);
   const [cookieOn, setCookieOn] = useState(false);
+  const [about, setAbout] = useState(null);
 
   const motionSafe = useMotionSafe();
 
@@ -22,13 +24,14 @@ export default function App() {
   const tasksSeq = useRef(0);
   const filesSeq = useRef(0);
 
-  // 加载格式、Cookie 状态
+  // 加载格式、Cookie 状态、应用信息
   useEffect(() => {
     api.formats().then(setFormats).catch((e) => console.warn("加载格式失败", e));
     api
       .cookieStatus()
       .then((s) => setCookieOn(!!s.active))
       .catch((e) => console.warn("加载 Cookie 状态失败", e));
+    api.about().then(setAbout).catch((e) => console.warn("加载关于信息失败", e));
   }, []);
 
   const refreshTasks = useCallback(() => {
@@ -89,9 +92,12 @@ export default function App() {
                 <span className="text-xs text-slate-400">浏览器里的下载工作台</span>
               </div>
             </div>
-            <span className="hidden sm:block text-sm text-slate-400">
-              粘贴链接即可下载
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="hidden sm:block text-sm text-slate-400">
+                粘贴链接即可下载
+              </span>
+              <AboutButton about={about} />
+            </div>
           </CardBody>
         </Card>
       </motion.div>

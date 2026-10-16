@@ -54,4 +54,6 @@ export const api = {
 
   deleteCookie: () =>
     fetch("/api/cookies", { method: "DELETE" }).then((r) => check(r, "清除失败")),
+
+  about: () => fetch("/api/about").then((r) => check(r, "加载关于信息失败")),
 };
