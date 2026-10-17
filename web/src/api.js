@@ -55,5 +55,27 @@ export const api = {
   deleteCookie: () =>
     fetch("/api/cookies", { method: "DELETE" }).then((r) => check(r, "清除失败")),
 
+  // 代理状态 / 保存 / 清除 / 连通性测试
+  proxyStatus: () =>
+    fetch("/api/proxy").then((r) => check(r, "加载代理状态失败")),
+
+  saveProxy: (url) =>
+    fetch("/api/proxy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    }).then((r) => check(r, "保存代理失败")),
+
+  deleteProxy: () =>
+    fetch("/api/proxy", { method: "DELETE" }).then((r) => check(r, "清除代理失败")),
+
+  testProxy: (url) =>
+    fetch("/api/proxy/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // 传了地址就测这个地址（不必先保存），否则测已保存的代理
+      body: JSON.stringify(url ? { url } : {}),
+    }).then((r) => check(r, "测试代理失败")),
+
   about: () => fetch("/api/about").then((r) => check(r, "加载关于信息失败")),
 };

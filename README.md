@@ -1,7 +1,8 @@
 # yt-dlp WebUI (Docker)
 
 一个自带 Web 界面的 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 下载服务，前端基于 **HeroUI（React）** 构建。
-在浏览器里粘贴链接即可下载视频 / 音频，支持实时进度、后台并发任务、**登录 Cookie 导入**和已下载文件管理。
+在浏览器里粘贴链接即可下载视频 / 音频，支持实时进度、后台并发任务、**登录 Cookie 导入**、
+**网络代理配置**和已下载文件管理。
 
 可通过 **GitHub Actions 定时自动构建最新 yt-dlp nightly 镜像**并推送到 GitHub Container Registry（GHCR）。
 
@@ -13,6 +14,7 @@
 - **并发任务**：多个下载并行，互不阻塞
 - **文件管理**：在网页里直接下载 / 删除已下载文件
 - **登录 Cookie 导入**：上传 `cookies.txt`（浏览器插件导出），用于下载私享 / 会员 / 年龄受限内容
+- **网络代理**：界面里配置 HTTP / SOCKS5 代理并一键测试连通性，解决国内无法直连 YouTube 的问题
 - **安全设计**：URL 全部走 yt-dlp Python API（无 shell 拼接），文件名做了路径穿越防护与 HTML 转义
 - **自动更新**：yt-dlp 每次构建从 GitHub nightly-builds 拉取最新 nightly，配合定时重建始终跟随最新开发版
 
@@ -37,6 +39,7 @@ docker run -d --name yt-dlp-webui \
   -p 8080:8080 \
   -v "$PWD/downloads:/downloads" \
   -v "$PWD/config:/config" \
+  --add-host=host.docker.internal:host-gateway \
   ghcr.io/dremous/yt-dlp-webui:latest
 ```
 
@@ -55,6 +58,7 @@ docker run -d --name yt-dlp-webui \
   -p 8080:8080 \
   -v "$PWD/downloads:/downloads" \
   -v "$PWD/config:/config" \
+  --add-host=host.docker.internal:host-gateway \
   --restart unless-stopped \
   yt-dlp-webui
 ```
@@ -70,6 +74,43 @@ docker run -d --name yt-dlp-webui \
 可随时上传覆盖或清除。
 
 支持格式：Netscape `cookies.txt` 或 JSON（yt-dlp 的 `cookiefile` 选项）。
+
+## 国内网络：配置代理
+
+大陆网络无法直连 YouTube（以及 Google 系域名），不带代理时任务会以
+`Unable to download webpage` / 连接超时之类的错误失败。在 WebUI 的
+**「网络代理」** 卡片里填好代理地址并点 **「测试连通」** 确认能通即可。
+
+### 前提：让代理允许局域网连接
+
+容器与宿主机网络是隔离的，代理必须监听非 loopback 地址，否则容器连不上：
+
+- Clash / Clash Verge / Mihomo：打开 **「允许局域网连接」**（配置文件里的 `allow-lan: true`）
+- v2ray / sing-box：监听地址设为 `0.0.0.0`
+- 同时放行服务器防火墙上的代理端口（`7890` / `7891` 等）
+
+> Linux / NAS 上这一步不做，页面上会一直提示「连接超时」。这是最常见的失败原因。
+
+### 代理地址怎么填
+
+| 代理所在位置 | 填法 |
+|---|---|
+| 就在同一台机器（宿主机）上 | `http://host.docker.internal:7890` |
+| 是另一个 Docker 容器 | `http://<容器名>:7890`（需与本项目在同一 docker 网络） |
+| 在局域网其他机器 / 软路由上 | `http://192.168.1.2:7890` |
+
+- **不要填 `127.0.0.1`**——容器里的它指向容器自己，不是宿主机。填错时页面会直接给出提示。
+- 只填 `主机:端口` 也可以，缺省按 `http://` 处理。
+- 支持 `http` / `https` / `socks5` / `socks5h`；`socks5h` 由代理端解析域名，容器场景更省事。
+
+### 排错对照
+
+| 测试结果 | 通常原因 |
+|---|---|
+| 连接被拒绝 | 地址/端口写错，或代理没在监听该端口 |
+| 连接超时 | 代理未开启「允许局域网连接」，或防火墙拦了端口 |
+| SOCKS 代理不可用 | `socks5` 需要 PySocks，官方镜像已内置；自建环境请 `pip install PySocks` |
+| 连通正常但下载仍失败 | 目标站点本身需要登录凭证，见上一节的 Cookie |
 
 ## GitHub Actions 自动构建最新版
 
@@ -90,10 +131,13 @@ docker run -d --name yt-dlp-webui \
 ## 本地开发（不带 Docker）
 
 ```bash
-# 1) 后端
+# 1) 后端（Windows 下 /downloads、/config 等默认路径不可用，需显式覆盖）
 pip install -r requirements.txt          # 需系统装有 ffmpeg
 pip install -U yt-dlp                     # yt-dlp 不在 requirements.txt（镜像内由 Dockerfile 安装 nightly）
-DOWNLOAD_DIR=/tmp/ytdl-downloads uvicorn app.main:app --reload --port 8080
+DOWNLOAD_DIR=/tmp/ytdl-downloads \
+COOKIE_FILE=/tmp/ytdl-config/cookies.txt \
+PROXY_FILE=/tmp/ytdl-config/proxy.txt \
+uvicorn app.main:app --reload --port 8080
 
 # 2) 前端（另开终端，构建产物输出到 app/static）
 cd web && npm install && npm run dev      # 开发服务器 http://localhost:5173，代理到 8080
@@ -114,6 +158,10 @@ cd web && npm install && npm run dev      # 开发服务器 http://localhost:517
 | POST | `/api/cookies` | 上传 Cookie 文件（multipart，字段 `file`） |
 | GET | `/api/cookies/status` | 查询 Cookie 状态 |
 | DELETE | `/api/cookies` | 清除 Cookie |
+| GET | `/api/proxy` | 查询代理状态 |
+| PUT | `/api/proxy` | 保存代理，body: `{"url": "http://host.docker.internal:7890"}` |
+| DELETE | `/api/proxy` | 清除代理，恢复直连 |
+| POST | `/api/proxy/test` | 测试代理能否连通 YouTube（body 可传 `{"url": "..."}` 测未保存的地址） |
 
 ## 配置项
 
@@ -121,6 +169,7 @@ cd web && npm install && npm run dev      # 开发服务器 http://localhost:517
 |----------|--------|------|
 | `DOWNLOAD_DIR` | `/downloads` | 下载文件存放目录 |
 | `COOKIE_FILE` | `/config/cookies.txt` | Cookie 文件路径 |
+| `PROXY_FILE` | `/config/proxy.txt` | 代理地址文件路径（一行 URL，由界面写入） |
 | `-p 8080:8080` | - | 对外映射端口 |
 
 ## 项目结构
@@ -144,16 +193,18 @@ cd web && npm install && npm run dev      # 开发服务器 http://localhost:517
 │       └── components/
 │           ├── DownloadForm.jsx
 │           ├── CookiePanel.jsx
+│           ├── ProxyPanel.jsx
 │           ├── TaskList.jsx
 │           └── FileList.jsx
 └── app/
-    ├── main.py                   # FastAPI 入口 + 路由（含 Cookie API）
-    ├── downloader.py             # yt-dlp 下载任务管理（并发 + 进度 + cookiefile）
+    ├── main.py                   # FastAPI 入口 + 路由（含 Cookie / 代理 API）
+    ├── downloader.py             # yt-dlp 下载任务管理（并发 + 进度 + cookiefile + 代理）
     └── static/                   # 前端构建产物（vite 自动输出，勿手改）
 ```
 
 ## 说明
 
 - 请遵守目标网站的条款与版权规定，仅下载你有权下载的内容。
-- 使用 Cookie 时注意保密：`./config` 目录包含你的登录凭证，不要提交到公开仓库（已加入 `.gitignore`）。
-- 部分站点可能需要额外配置（如代理），本项目保持开箱即用的简洁默认。
+- 使用 Cookie 时注意保密：`./config` 目录含登录凭证与代理地址（可能带账号密码），
+  不要提交到公开仓库（已加入 `.gitignore`）。
+- 代理只影响 yt-dlp 的出站请求，不影响浏览器访问 WebUI 本身。

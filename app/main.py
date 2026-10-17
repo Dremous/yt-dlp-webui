@@ -10,13 +10,20 @@
 - POST /api/cookies   导入 Cookie（cookies.txt）
 - GET  /api/cookies/status  查询 Cookie 状态
 - DELETE /api/cookies 清除 Cookie
+- GET  /api/proxy     查询代理状态
+- PUT  /api/proxy     保存代理地址
+- DELETE /api/proxy   清除代理
+- POST /api/proxy/test 探测代理能否连通 YouTube
 - GET  /api/about     应用信息（版本 / yt-dlp 版本 / 作者）
 - 静态前端挂载在 /
 """
 
 import json
 import os
+import time
+import urllib.parse
 from pathlib import Path
+from typing import Optional
 
 import yt_dlp
 from fastapi import FastAPI, HTTPException, Query, UploadFile
@@ -24,19 +31,25 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .downloader import FORMATS, TMP_SUFFIXES, DownloadManager
+from .downloader import FORMATS, TMP_SUFFIXES, DownloadManager, normalize_proxy
 
 # 镜像标签版本：Docker 构建时由 workflow 注入（DATE-SHORT_SHA），本地开发回退为 dev
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
 
 # ---------------------------------------------------------------------------
-# 下载目录与 Cookie 文件（容器内可通过环境变量覆盖）
+# 下载目录、Cookie 文件与代理配置（容器内可通过环境变量覆盖）
 # ---------------------------------------------------------------------------
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
 COOKIE_FILE = os.environ.get("COOKIE_FILE", "/config/cookies.txt")
+PROXY_FILE = os.environ.get("PROXY_FILE", "/config/proxy.txt")
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-manager = DownloadManager(DOWNLOAD_DIR, COOKIE_FILE)
+manager = DownloadManager(DOWNLOAD_DIR, COOKIE_FILE, PROXY_FILE)
+
+# 代理连通性探测目标：Google 的 204 探针端点，无正文、开销极小；
+# 且它与 YouTube 同属被墙域名，能真实反映「这个代理到底能不能出去看 YouTube」。
+PROXY_TEST_URL = "https://www.youtube.com/generate_204"
+PROXY_TEST_TIMEOUT = 10  # 单位：秒。国内配代理时超时太短容易误报失败
 
 app = FastAPI(title="yt-dlp WebUI", version="1.0.0")
 
@@ -44,6 +57,16 @@ app = FastAPI(title="yt-dlp WebUI", version="1.0.0")
 class DownloadRequest(BaseModel):
     url: str = Field(..., max_length=2048, description="视频 / 音频 URL")
     format: str = Field("mp4", description="输出格式：mp4 / best / mp3")
+
+
+class ProxyRequest(BaseModel):
+    url: str = Field(..., max_length=2048,
+                     description="代理地址，如 http://host.docker.internal:7890")
+
+
+class ProxyTestRequest(BaseModel):
+    url: Optional[str] = Field(None, max_length=2048,
+                               description="待测代理；省略时测试当前已保存的代理")
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +233,115 @@ def cookie_status():
 def delete_cookie():
     manager.remove_cookie()
     return {"ok": True, "deleted": True}
+
+
+# ---------------------------------------------------------------------------
+# 网络代理：状态 / 保存 / 清除 / 连通性测试
+# ---------------------------------------------------------------------------
+def _localhost_hint(proxy: str) -> Optional[str]:
+    """容器内填 127.0.0.1 是最常见的误配：那指向容器自己，而不是宿主机。
+
+    仅当自身确实运行在容器中时才提示；直接跑在宿主机上时，127.0.0.1 可能是对的。
+    """
+    if not Path("/.dockerenv").exists():
+        return None
+    host = (urllib.parse.urlparse(proxy).hostname or "").lower()
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        return None
+    return (
+        "检测到地址是 127.0.0.1：当前运行在容器内，它指向容器自身而不是宿主机。"
+        "若代理装在宿主机，请改成 host.docker.internal（或代理所在机器的局域网 IP）"
+    )
+
+
+def _humanize_proxy_error(exc: Exception) -> str:
+    """把底层网络异常翻译成能照着排查的中文提示。"""
+    msg = str(exc)
+    lower = msg.lower()
+    if "connection refused" in lower:
+        return "连接被拒绝：代理地址/端口不对，或宿主机代理未在该端口监听"
+    if "timed out" in lower or "timeout" in lower:
+        return ("连接超时：代理无响应。Linux/NAS 上请确认代理已开启「允许局域网」"
+                "（Clash 的 allow-lan），并已放行防火墙端口")
+    if "socks" in lower or "pysocks" in lower:
+        return f"SOCKS 代理不可用：{msg[:200]}"
+    if "certificate" in lower or "ssl" in lower:
+        return f"TLS/证书校验失败：{msg[:200]}"
+    return msg[:300] or exc.__class__.__name__
+
+
+def _probe_proxy(proxy: str) -> dict:
+    """带着代理向 YouTube 发一次轻量请求，返回结构化结果。
+
+    刻意不抛异常：前端需要区分「代理不通」和「代理配错」，
+    把原因显示在界面上，比抛出 500 有用得多。
+    """
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "socket_timeout": PROXY_TEST_TIMEOUT,
+        "proxy": proxy,  # 与真实下载走同一条 yt-dlp 请求链路
+    }
+    started = time.monotonic()
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            with ydl.urlopen(PROXY_TEST_URL) as resp:
+                status = resp.status
+    except Exception as exc:  # noqa: BLE001 - 任意网络/代理异常都要反馈给前端
+        return {"ok": False, "error": _humanize_proxy_error(exc),
+                "target": PROXY_TEST_URL}
+    latency_ms = int((time.monotonic() - started) * 1000)
+    if status != 204:
+        return {"ok": False, "error": f"目标返回 HTTP {status}",
+                "target": PROXY_TEST_URL}
+    return {"ok": True, "latency_ms": latency_ms, "target": PROXY_TEST_URL}
+
+
+@app.get("/api/proxy")
+def proxy_status():
+    return manager.proxy_status()
+
+
+@app.put("/api/proxy")
+def save_proxy(req: ProxyRequest):
+    try:
+        url = manager.save_proxy(req.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    result = {"ok": True, "url": url}
+    hint = _localhost_hint(url)
+    if hint:
+        result["hint"] = hint  # 保存时就把提示给出，不必等到测试
+    return result
+
+
+@app.delete("/api/proxy")
+def delete_proxy():
+    manager.remove_proxy()
+    return {"ok": True, "deleted": True}
+
+
+@app.post("/api/proxy/test")
+def test_proxy(req: Optional[ProxyTestRequest] = None):
+    """探测代理能否连通 YouTube。
+
+    优先测试请求里传入的地址（还没保存也能先试），没传则测试当前已保存的代理。
+    """
+    if req is not None and req.url:
+        try:
+            url = normalize_proxy(req.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    else:
+        url = manager.proxy
+        if not url:
+            raise HTTPException(status_code=400, detail="尚未配置代理，请先填写代理地址")
+    result = _probe_proxy(url)
+    hint = _localhost_hint(url)
+    if hint:
+        result["hint"] = hint
+    return result
 
 
 # ---------------------------------------------------------------------------

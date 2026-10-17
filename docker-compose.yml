@@ -7,9 +7,14 @@ services:
     volumes:
       # 下载文件持久化
       - ./downloads:/downloads
-      # Cookie 持久化
+      # Cookie 与代理配置持久化
       - ./config:/config
     environment:
       - DOWNLOAD_DIR=/downloads
       - COOKIE_FILE=/config/cookies.txt
+      - PROXY_FILE=/config/proxy.txt
+    # 让容器内可以用 host.docker.internal 指向宿主机（Linux 原生 Docker 必需，
+    # Docker Desktop 自带；国内代理装在宿主机时靠它访问）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped

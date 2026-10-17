@@ -6,6 +6,7 @@ import { api } from "./api.js";
 import { listContainer, cardItem, useMotionSafe } from "./lib/motion.js";
 import DownloadForm from "./components/DownloadForm.jsx";
 import CookiePanel from "./components/CookiePanel.jsx";
+import ProxyPanel from "./components/ProxyPanel.jsx";
 import TaskList from "./components/TaskList.jsx";
 import FileList from "./components/FileList.jsx";
 import AboutButton from "./components/AboutButton.jsx";
@@ -16,6 +17,7 @@ export default function App() {
   const [taskTotal, setTaskTotal] = useState(0);
   const [files, setFiles] = useState([]);
   const [cookieOn, setCookieOn] = useState(false);
+  const [proxy, setProxy] = useState({ active: false, url: "" });
   const [about, setAbout] = useState(null);
 
   const motionSafe = useMotionSafe();
@@ -24,13 +26,17 @@ export default function App() {
   const tasksSeq = useRef(0);
   const filesSeq = useRef(0);
 
-  // 加载格式、Cookie 状态、应用信息
+  // 加载格式、Cookie 状态、代理状态、应用信息
   useEffect(() => {
     api.formats().then(setFormats).catch((e) => console.warn("加载格式失败", e));
     api
       .cookieStatus()
       .then((s) => setCookieOn(!!s.active))
       .catch((e) => console.warn("加载 Cookie 状态失败", e));
+    api
+      .proxyStatus()
+      .then((s) => setProxy({ active: !!s.active, url: s.url || "" }))
+      .catch((e) => console.warn("加载代理状态失败", e));
     api.about().then(setAbout).catch((e) => console.warn("加载关于信息失败", e));
   }, []);
 
@@ -108,6 +114,14 @@ export default function App() {
 
       <motion.div variants={cardItem} className="mt-4">
         <CookiePanel active={cookieOn} onChanged={setCookieOn} />
+      </motion.div>
+
+      <motion.div variants={cardItem} className="mt-4">
+        <ProxyPanel
+          active={proxy.active}
+          current={proxy.url}
+          onChanged={(active, url) => setProxy({ active, url: url || "" })}
+        />
       </motion.div>
 
       <motion.div variants={cardItem} className="mt-4">

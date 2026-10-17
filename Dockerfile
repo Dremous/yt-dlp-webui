@@ -27,7 +27,8 @@ FROM python:3.13-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DOWNLOAD_DIR=/downloads \
-    COOKIE_FILE=/config/cookies.txt
+    COOKIE_FILE=/config/cookies.txt \
+    PROXY_FILE=/config/proxy.txt
 
 # 镜像标签版本（构建时由 workflow 注入 DATE-SHORT_SHA），供「关于」界面显示
 ARG APP_VERSION=dev
@@ -60,7 +61,7 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD curl -fs http://127.0.0.1:8080/api/formats || exit 1
 
-# 卷：下载文件与 Cookie 持久化
+# 卷：下载文件与配置（Cookie / 代理）持久化
 VOLUME /downloads /config
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

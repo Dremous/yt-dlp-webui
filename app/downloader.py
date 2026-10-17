@@ -4,12 +4,14 @@
 - 所有 URL 都通过 yt-dlp 的 Python API 传递（绝不使用 shell 拼接），避免命令注入。
 - 每个任务写入自己的子目录，产物按任务隔离，消除并发误判。
 - 用信号量限制最大并发，用上限清理完成任务，防止线程/内存无限增长。
+- Cookie 与代理都以「文件持久化 + 内存缓存」的方式提供，改完立即对新任务生效。
 """
 
 import os
 import shutil
 import threading
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -58,6 +60,33 @@ TMP_SUFFIXES = (
     ".jpg", ".png", ".description", ".info.json",
 )
 
+# 允许的代理协议：socks5h 表示由代理端解析域名，容器/远程代理场景更省事
+ALLOWED_PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
+
+
+def normalize_proxy(url: str) -> str:
+    """校验并规范化代理地址；非法时抛出 ValueError（中文提示，直接反馈给前端）。
+
+    允许省略协议，如只填 `host.docker.internal:7890`，缺省按 http:// 处理。
+    """
+    raw = (url or "").strip()
+    if not raw:
+        raise ValueError("代理地址不能为空")
+    if "://" not in raw:
+        raw = "http://" + raw  # 只填 host:port 时按 http 代理处理
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme not in ALLOWED_PROXY_SCHEMES:
+        raise ValueError("代理协议仅支持 http / https / socks5 / socks5h")
+    if not parsed.hostname:
+        raise ValueError("代理地址缺少主机名")
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError("代理端口不合法（应为 0-65535 的整数）")
+    if port is None:
+        raise ValueError("代理地址必须带端口，例如 http://host.docker.internal:7890")
+    return raw
+
 
 class DownloadCancelled(Exception):
     """下载被用户主动取消（或排队超限被清理）时抛出的内部信号。"""
@@ -102,15 +131,21 @@ class DownloadManager:
 
     cookie_file：可选。指向 Netscape 格式的 cookies.txt，
     若文件存在则自动附加到 yt-dlp 的 cookiefile 选项，用于登录/绕过限制。
+    proxy_file：可选。指向保存代理地址的文本文件（一行 URL），
+    若存在则让 yt-dlp 的出站请求走该代理，用于国内访问 YouTube 等被墙站点。
     """
 
-    def __init__(self, download_dir: Path, cookie_file: Optional[str] = None):
+    def __init__(self, download_dir: Path, cookie_file: Optional[str] = None,
+                 proxy_file: Optional[str] = None):
         self.download_dir = Path(download_dir)
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.cookie_file = Path(cookie_file) if cookie_file else None
+        self.proxy_file = Path(proxy_file) if proxy_file else None
         self.tasks: Dict[str, DownloadTask] = {}
         self._lock = threading.Lock()
         self._slots = threading.BoundedSemaphore(MAX_CONCURRENT)
+        self._proxy: Optional[str] = None  # 当前生效的代理地址（None = 直连）
+        self._load_proxy()
 
     # ------------------------------------------------------------------
     # Cookie 支持
@@ -147,6 +182,62 @@ class DownloadManager:
             "updated": int(self.cookie_file.stat().st_mtime),
             "size": self.cookie_file.stat().st_size,
         }
+
+    # ------------------------------------------------------------------
+    # 代理支持
+    # ------------------------------------------------------------------
+    @property
+    def proxy(self) -> Optional[str]:
+        """当前生效的代理地址（None 表示直连）。读时加锁，避免与保存操作竞争。"""
+        with self._lock:
+            return self._proxy
+
+    def proxy_status(self) -> dict:
+        """返回代理状态，供前端展示。"""
+        proxy = self.proxy
+        if not proxy:
+            return {"active": False, "url": None}
+        return {"active": True, "url": proxy}
+
+    def save_proxy(self, url: str) -> str:
+        """保存代理地址并立即生效，返回规范化后的地址。
+
+        与 save_cookie 同策略：先校验再「临时文件 + 原子替换」写入，
+        避免并发下载读到写了一半的内容；代理常含账号密码，权限收为 0600。
+        """
+        if self.proxy_file is None:
+            raise ValueError("未配置 PROXY_FILE，无法保存代理")
+        proxy = normalize_proxy(url)  # 非法地址在落盘前就拒绝
+        self.proxy_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.proxy_file.with_name(self.proxy_file.name + ".tmp")
+        tmp.write_text(proxy + "\n", encoding="utf-8")
+        os.chmod(tmp, 0o600)  # 代理地址可能含 user:password，限制为本用户可读写
+        os.replace(tmp, self.proxy_file)
+        with self._lock:
+            self._proxy = proxy  # 立即对后续任务生效，无需重启容器
+        return proxy
+
+    def remove_proxy(self) -> None:
+        """删除已保存的代理配置并恢复直连。"""
+        if self.proxy_file is not None and self.proxy_file.exists():
+            self.proxy_file.unlink()
+        with self._lock:
+            self._proxy = None
+
+    def _load_proxy(self) -> None:
+        """启动时从磁盘恢复代理配置（容器重启后依然生效）。"""
+        if self.proxy_file is None or not self.proxy_file.is_file():
+            return
+        try:
+            raw = self.proxy_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            return  # 文件不可读时按未配置处理，不阻塞服务启动
+        if not raw:
+            return
+        try:
+            self._proxy = normalize_proxy(raw)
+        except ValueError:
+            self._proxy = None  # 手工改坏的文件忽略掉，视为未配置
 
     # ------------------------------------------------------------------
     # 对外接口
@@ -212,6 +303,11 @@ class DownloadManager:
         # 若已导入 Cookie，则附加 cookiefile（用于登录站点/绕过限制）
         if self.cookie_ready():
             opts["cookiefile"] = str(self.cookie_file)
+
+        # 若已配置代理，则让 yt-dlp 的所有出站请求走代理（国内访问 YouTube 必需）
+        proxy = self.proxy
+        if proxy:
+            opts["proxy"] = proxy
 
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
