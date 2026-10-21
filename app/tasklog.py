@@ -59,18 +59,27 @@ class TaskLogger:
     # 内部
     # ------------------------------------------------------------------
     def _append(self, msg: str, is_error: bool) -> None:
-        # yt-dlp 偶尔发空行，跳过以免白占缓冲位
-        if not msg or not msg.strip():
+        # yt-dlp 会把 ERROR 行和整段 traceback 作为同一条消息传进来（消息内含多个 \n）。
+        # 必须按物理行拆开：
+        # - 缓冲里每个元素才真的是「一行」，LOG_TAIL_LINES 才名副其实
+        # - error 摘要只取首行（即 "ERROR: ..."），不让 traceback 路径挤占前端那一行
+        # 顺序仍然重要：每行都是先脱敏再截断，截断点落在密码中间也不留残片。
+        lines: List[str] = []
+        for raw in msg.splitlines():
+            if not raw.strip():
+                continue  # 消息内部的空行不占缓冲位
+            line = _redact(raw.rstrip())
+            if len(line) > self._max_line_len:
+                line = line[: self._max_line_len]
+            lines.append(line)
+
+        if not lines:
             return
-        # 顺序很重要：先脱敏再截断。若先截断，截断点可能落在密码中间，
-        # 脱敏正则匹配不到残缺的 userinfo，密码片段就留在日志里了。
-        line = _redact(msg.rstrip())
-        if len(line) > self._max_line_len:
-            line = line[: self._max_line_len]
+
         with self._lock:
-            self._lines.append(line)
+            self._lines.extend(lines)
             if is_error:
-                self._errors.append(line)
+                self._errors.append(lines[0])  # 首行才是机器可读的错误结论
 
     # ------------------------------------------------------------------
     # 对外

@@ -69,6 +69,9 @@ LOG_NAME = "yt-dlp.log"
 # 失败时打印到容器日志（docker logs）的末段行数
 LOG_TAIL_LINES = 30
 
+# 已结束的任务状态：只有这些状态允许从列表删除，进行中的必须先取消
+ENDED_STATES = ("finished", "failed", "cancelled")
+
 # 允许的代理协议：socks5h 表示由代理端解析域名，容器/远程代理场景更省事
 ALLOWED_PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
 
@@ -276,6 +279,49 @@ class DownloadManager:
         """当前内存中的任务总数（含已结束任务）。"""
         with self._lock:
             return len(self.tasks)
+
+    # ------------------------------------------------------------------
+    # 任务删除（只处理已结束的任务，避免与后台线程争抢同一目录）
+    # ------------------------------------------------------------------
+    def remove_task(self, task_id: str) -> dict:
+        """删除一个已结束的任务记录，返回 {"id", "removed_files"}。
+
+        磁盘策略（与界面的确认文案一致）：
+        - failed / cancelled：目录里只有 .part、.log 等残留，连目录一起删
+        - finished：视频文件还有用，只删记录、保留目录
+
+        任务不存在抛 KeyError；仍在排队/下载中抛 ValueError，调用方应提示先取消。
+        """
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if task is None:
+                raise KeyError(task_id)
+            if task.status not in ENDED_STATES:
+                raise ValueError("任务尚未结束，请先取消")
+            del self.tasks[task_id]
+
+        # 目录清理放在锁外：rmtree 可能较慢，不该阻塞其他任务的状态读取。
+        # 与后台线程并发是安全的——取消时线程也会 rmtree，两边都用 ignore_errors。
+        discard = task.status in ("failed", "cancelled")
+        if discard:
+            shutil.rmtree(self.download_dir / task_id, ignore_errors=True)
+        return {"id": task_id, "removed_files": discard}
+
+    def remove_finished(self) -> int:
+        """清理所有已结束的任务记录，返回删除数量；进行中的任务不受影响。"""
+        with self._lock:
+            ended = [
+                (tid, t.status)
+                for tid, t in self.tasks.items()
+                if t.status in ENDED_STATES
+            ]
+            for tid, _ in ended:
+                del self.tasks[tid]
+
+        for tid, status in ended:
+            if status in ("failed", "cancelled"):
+                shutil.rmtree(self.download_dir / tid, ignore_errors=True)
+        return len(ended)
 
     # ------------------------------------------------------------------
     # 内部执行

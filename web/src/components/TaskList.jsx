@@ -1,12 +1,18 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   Button,
   Card,
   CardBody,
   CardHeader,
   Chip,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
   Progress,
   addToast,
+  useDisclosure,
 } from "@heroui/react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -17,6 +23,7 @@ import {
   FileArrowDown,
   ListChecks,
   Prohibit,
+  Trash,
   X,
   XCircle,
 } from "@phosphor-icons/react";
@@ -32,8 +39,70 @@ const STATE_META = {
   cancelled: { label: "已取消", color: "default", Icon: Prohibit },
 };
 
+// 只有已结束的任务允许删除：进行中的必须先取消，避免和后台线程争抢同一目录
+const ENDED_STATES = ["finished", "failed", "cancelled"];
+
+// 确认弹窗的文案随状态变化：删已完成任务不会动磁盘上的视频文件
+function pendingMessage(pending) {
+  if (!pending) return "";
+  if (pending.kind === "all") {
+    return "将移除所有已结束的任务记录。失败/取消的任务会连带清理临时文件与日志；已完成任务的视频文件会保留在磁盘上。";
+  }
+  if (pending.task.status === "finished") {
+    return "仅移除任务记录，已下载的文件会保留在磁盘上。";
+  }
+  return "将移除任务记录，并清理该任务的临时文件与日志。";
+}
+
 export default function TaskList({ tasks, onChanged, total }) {
   const shown = tasks.slice(0, 30);
+  // 待删除目标：{ kind: "one", task } 或 { kind: "all" }；null 表示弹窗空闲
+  const [pending, setPending] = useState(null);
+  const { isOpen, onOpen, onOpenChange } = useDisclosure();
+
+  // 只统计当前可见的任务，用来决定是否显示「清理已结束」按钮；
+  // 真正的清理范围是全部已结束任务，所以按钮上不写数字。
+  const endedCount = shown.filter((t) => ENDED_STATES.includes(t.status)).length;
+
+  function askDelete(task) {
+    setPending({ kind: "one", task });
+    onOpen();
+  }
+
+  function askCleanup() {
+    setPending({ kind: "all" });
+    onOpen();
+  }
+
+  // target 显式传入：点确认时 Modal 会先关闭并清空 pending，
+  // 依赖闭包读 pending 虽然也能工作，但显式传参更不容易被后续重构改坏。
+  async function confirmPending(target = pending) {
+    if (!target) return;
+    try {
+      if (target.kind === "all") {
+        const data = await api.cleanupTasks();
+        addToast({
+          title: "已清理",
+          description: `移除 ${data.removed} 条已结束任务`,
+          color: "success",
+        });
+      } else {
+        const data = await api.removeTask(target.task.id);
+        addToast({
+          title: "已删除",
+          description: data.removed_files
+            ? "任务记录与临时文件已清理"
+            : "任务记录已移除，文件已保留",
+          color: "success",
+        });
+      }
+      onChanged();
+    } catch (e) {
+      addToast({ title: "操作失败", description: e.message, color: "danger" });
+    } finally {
+      setPending(null);
+    }
+  }
 
   return (
     <Card>
@@ -42,9 +111,24 @@ export default function TaskList({ tasks, onChanged, total }) {
           <ListChecks size={18} weight="bold" className="text-emerald-400" aria-hidden="true" />
           <h2 className="text-base font-semibold text-white">下载任务</h2>
         </div>
-        <Chip size="sm" variant="flat" color="primary">
-          {total}
-        </Chip>
+        <div className="flex items-center gap-2">
+          {endedCount > 0 && (
+            <Button
+              size="sm"
+              disableRipple
+              variant="light"
+              color="danger"
+              onPress={askCleanup}
+              className="transition-ui"
+              startContent={<Trash size={14} weight="bold" aria-hidden="true" />}
+            >
+              清理已结束
+            </Button>
+          )}
+          <Chip size="sm" variant="flat" color="primary">
+            {total}
+          </Chip>
+        </div>
       </CardHeader>
       <CardBody className="px-5 pb-5">
         {shown.length === 0 ? (
@@ -58,7 +142,12 @@ export default function TaskList({ tasks, onChanged, total }) {
             <div className="flex flex-col gap-3">
               <AnimatePresence initial={false} mode="popLayout">
                 {shown.map((t) => (
-                  <TaskItem key={t.id} task={t} onChanged={onChanged} />
+                  <TaskItem
+                    key={t.id}
+                    task={t}
+                    onChanged={onChanged}
+                    onDelete={() => askDelete(t)}
+                  />
                 ))}
               </AnimatePresence>
             </div>
@@ -69,6 +158,46 @@ export default function TaskList({ tasks, onChanged, total }) {
             )}
           </>
         )}
+
+        {/* 单个删除与批量清理共用一个 Modal，避免每行各建一个实例 */}
+        <Modal
+          isOpen={isOpen}
+          onOpenChange={(open) => {
+            onOpenChange(open);
+            if (!open) setPending(null);
+          }}
+          backdrop="blur"
+        >
+          <ModalContent>
+            {(onClose) => (
+              <>
+                <ModalHeader className="text-white">
+                  {pending?.kind === "all" ? "清理已结束任务" : "删除任务"}
+                </ModalHeader>
+                <ModalBody>
+                  <p className="text-sm text-slate-300 break-all">
+                    {pendingMessage(pending)}
+                  </p>
+                </ModalBody>
+                <ModalFooter>
+                  <Button variant="light" onPress={onClose}>
+                    取消
+                  </Button>
+                  <Button
+                    color="danger"
+                    onPress={() => {
+                      const target = pending;
+                      onClose();
+                      confirmPending(target);
+                    }}
+                  >
+                    确认删除
+                  </Button>
+                </ModalFooter>
+              </>
+            )}
+          </ModalContent>
+        </Modal>
       </CardBody>
     </Card>
   );
@@ -81,10 +210,11 @@ function progressColor(status) {
   return "default";
 }
 
-function TaskItem({ task, onChanged }) {
+function TaskItem({ task, onChanged, onDelete }) {
   const meta = STATE_META[task.status] || { label: task.status, color: "default" };
   const motionSafe = useMotionSafe();
   const title = task.title ? ` · ${task.title}` : "";
+  const isEnded = ENDED_STATES.includes(task.status);
 
   async function handleCancel() {
     try {
@@ -211,6 +341,20 @@ function TaskItem({ task, onChanged }) {
             startContent={<FileArrowDown size={14} weight="bold" aria-hidden="true" />}
           >
             下载文件
+          </Button>
+        )}
+        {isEnded && (
+          <Button
+            isIconOnly
+            size="sm"
+            disableRipple
+            color="danger"
+            variant="light"
+            onPress={onDelete}
+            className="transition-ui"
+            aria-label="删除任务"
+          >
+            <Trash size={14} weight="bold" aria-hidden="true" />
           </Button>
         )}
       </div>

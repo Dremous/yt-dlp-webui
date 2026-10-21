@@ -4,6 +4,8 @@
 - POST /api/download  提交下载任务
 - GET  /api/formats   可用输出格式
 - GET  /api/tasks     任务列表（前端轮询）
+- DELETE /api/tasks/{task_id}  删除一个已结束的任务记录
+- POST /api/tasks/cleanup      清理全部已结束的任务记录
 - GET  /api/files     已下载文件列表
 - GET  /files/{filename:path}  下载文件（相对路径，含任务子目录）
 - DELETE /api/files/{filename:path} 删除文件
@@ -31,7 +33,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .downloader import FORMATS, TMP_SUFFIXES, DownloadManager, normalize_proxy
+from .downloader import (
+    ENDED_STATES,
+    FORMATS,
+    TMP_SUFFIXES,
+    DownloadManager,
+    normalize_proxy,
+)
 
 # 镜像标签版本：Docker 构建时由 workflow 注入（DATE-SHORT_SHA），本地开发回退为 dev
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
@@ -100,11 +108,29 @@ def cancel_task(task_id: str):
     task = manager.get(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if task.status in ("finished", "failed", "cancelled"):
+    if task.status in ENDED_STATES:
         raise HTTPException(status_code=400, detail="任务已结束，无法取消")
     # queued：线程 acquire 后自查返回；downloading：进度 hook 检测后终止
     task.status = "cancelled"
     return {"ok": True, "id": task_id}
+
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: str):
+    """删除一个已结束的任务记录；失败/取消的任务会连带清理任务目录。"""
+    try:
+        result = manager.remove_task(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, **result}
+
+
+@app.post("/api/tasks/cleanup")
+def cleanup_tasks():
+    """清理全部已结束的任务记录，返回实际删除的数量。"""
+    return {"ok": True, "removed": manager.remove_finished()}
 
 
 @app.get("/api/files")

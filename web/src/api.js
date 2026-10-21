@@ -36,6 +36,18 @@ export const api = {
       (r) => check(r, "取消失败")
     ),
 
+  // 删除单个已结束任务（失败/取消的任务会连带清理任务目录）
+  removeTask: (id) =>
+    fetch(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }).then(
+      (r) => check(r, "删除任务失败")
+    ),
+
+  // 清理全部已结束任务
+  cleanupTasks: () =>
+    fetch("/api/tasks/cleanup", { method: "POST" }).then((r) =>
+      check(r, "清理任务失败")
+    ),
+
   deleteFile: (name) =>
     fetch(`/api/files/${encodeURIComponent(name)}`, { method: "DELETE" }).then(
       (r) => check(r, "删除失败")

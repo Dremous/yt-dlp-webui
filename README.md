@@ -13,6 +13,7 @@
 - **实时进度**：百分比、速度、剩余时间
 - **并发任务**：多个下载并行，互不阻塞
 - **文件管理**：在网页里直接下载 / 删除已下载文件
+- **任务清理**：已结束的任务可单独删除或一键清理；失败/取消的任务会连带回收临时文件与日志，已完成的视频文件保留
 - **登录 Cookie 导入**：上传 `cookies.txt`（浏览器插件导出），用于下载私享 / 会员 / 年龄受限内容
 - **网络代理**：界面里配置 HTTP / SOCKS5 代理并一键测试连通性，解决国内无法直连 YouTube 的问题
 - **失败可诊断**：下载失败时保留 yt-dlp 的完整日志（代理密码自动脱敏），界面直接显示关键错误行
@@ -183,6 +184,8 @@ python -m unittest discover -s tests -v
 | POST | `/api/download` | 提交下载任务，body: `{"url": "...", "format": "mp4"}` |
 | GET | `/api/tasks?limit=N` | 任务列表（含进度；可选 limit 限制条数，默认 30，上限 200） |
 | POST | `/api/tasks/{task_id}/cancel` | 取消排队/下载中的任务（失败/已取消任务不可取消） |
+| DELETE | `/api/tasks/{task_id}` | 删除一个已结束的任务记录（失败/取消的任务连带清理任务目录，已完成的保留文件） |
+| POST | `/api/tasks/cleanup` | 清理全部已结束的任务记录，返回实际删除数量 |
 | GET | `/api/files` | 已下载文件列表 |
 | GET | `/files/{filename:path}` | 下载指定文件（相对路径，含任务子目录） |
 | DELETE | `/api/files/{filename:path}` | 删除指定文件 |

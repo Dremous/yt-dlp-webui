@@ -80,6 +80,67 @@ class BufferTest(unittest.TestCase):
         self.assertEqual(logger.redacted_lines(), ["ok"])
 
 
+class MultilineMessageTest(unittest.TestCase):
+    """yt-dlp 会把 ERROR 行和整段 traceback 塞进同一条 logger 消息（含多个 \\n）。
+
+    如果不拆，缓冲里的"一行"其实是好几行，会同时破坏两件事：
+    - error 摘要被 traceback 路径挤占，前端那一行几乎全是噪音
+    - LOG_TAIL_LINES 名义 30 行、实际打印上百行
+    """
+
+    def test_splits_multiline_message_into_physical_lines(self):
+        logger = TaskLogger()
+        logger.error(
+            "ERROR: [youtube] abc: This video is unavailable\n"
+            '  File "/usr/local/lib/python3.13/site-packages/yt_dlp/extractor/common.py", line 764, in extract\n'
+            "    ie_result = self._real_extract(url)"
+        )
+
+        self.assertEqual(
+            logger.redacted_lines(),
+            [
+                "ERROR: [youtube] abc: This video is unavailable",
+                '  File "/usr/local/lib/python3.13/site-packages/yt_dlp/extractor/common.py", line 764, in extract',
+                "    ie_result = self._real_extract(url)",
+            ],
+        )
+
+    def test_multiline_error_summary_uses_first_line(self):
+        logger = TaskLogger()
+        logger.error(
+            "ERROR: [youtube] abc: This video is unavailable\n"
+            '  File "/usr/local/lib/python3.13/site-packages/yt_dlp/extractor/common.py", line 764, in extract'
+        )
+
+        summary = logger.error_summary()
+
+        self.assertEqual(summary, "ERROR: [youtube] abc: This video is unavailable")
+        self.assertNotIn("\n", summary)
+
+    def test_multiline_lines_are_redacted_individually(self):
+        """拆分后每一行都要单独脱敏，不能只处理第一行。"""
+        logger = TaskLogger()
+        logger.info("line one\nhttps://u:p@example.com/x\nline three")
+
+        self.assertEqual(
+            logger.redacted_lines(),
+            ["line one", "https://***@example.com/x", "line three"],
+        )
+
+    def test_skips_blank_lines_inside_multiline_message(self):
+        logger = TaskLogger()
+        logger.debug("a\n\n  \nb")
+
+        self.assertEqual(logger.redacted_lines(), ["a", "b"])
+
+    def test_tail_line_count_matches_physical_lines(self):
+        """缓冲里每个元素都必须是物理行，取末 N 条才是真正的 N 行。"""
+        logger = TaskLogger(max_lines=10)
+        logger.debug("a\nb\nc")
+
+        self.assertEqual(logger.redacted_lines(), ["a", "b", "c"])
+
+
 class ErrorSummaryTest(unittest.TestCase):
     def test_returns_last_error_line(self):
         """前端只显示单行摘要，应取最后一条 error 级别消息。"""
