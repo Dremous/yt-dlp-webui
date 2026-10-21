@@ -100,7 +100,13 @@ def start_download(req: DownloadRequest):
 
 @app.get("/api/tasks")
 def list_tasks(limit: int = Query(30, ge=1, le=50)):
-    return {"total": manager.count(), "tasks": manager.snapshot(limit)}
+    # ended 是全量计数：前端用它决定「清理已结束」按钮是否出现，
+    # 只数 limit 之内的任务会漏掉列表之外的可清理项。
+    return {
+        "total": manager.count(),
+        "ended": manager.count_ended(),
+        "tasks": manager.snapshot(limit),
+    }
 
 
 @app.post("/api/tasks/{task_id}/cancel")
@@ -121,9 +127,10 @@ def delete_task(task_id: str):
     try:
         result = manager.remove_task(task_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        # from None：KeyError 的文本是内部任务 ID，不该出现在异常链里
+        raise HTTPException(status_code=404, detail="任务不存在") from None
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, **result}
 
 

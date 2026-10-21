@@ -35,6 +35,29 @@ class RedactionTest(unittest.TestCase):
 
         self.assertEqual(logger.redacted_lines()[0], "fetching https://***@example.com/path")
 
+    def test_redacts_password_containing_at_sign(self):
+        """密码里直接写 @ 时，匹配必须贪婪到最后一个 @，否则会漏出密码尾部。
+
+        normalize_proxy 不会对 userinfo 做百分号编码，用户填的 p@ss 会原样进日志；
+        匹配到第一个 @ 只能抹掉 "p"，后面的 "ss" 就留在了日志里。
+        """
+        logger = TaskLogger()
+        logger.debug("socks5://user:p@ss@192.168.0.30:7893")
+
+        self.assertEqual(
+            logger.redacted_lines()[0], "socks5://***@192.168.0.30:7893"
+        )
+
+    def test_keeps_at_sign_in_query_untouched(self):
+        """查询串里的 @（如 email=a@b.com）在路径之后，不能被当成 userinfo 抹掉。"""
+        logger = TaskLogger()
+        logger.info("https://example.com/watch?v=1&email=a@b.com")
+
+        self.assertEqual(
+            logger.redacted_lines()[0],
+            "https://example.com/watch?v=1&email=a@b.com",
+        )
+
     def test_keeps_urls_without_credentials(self):
         """没有凭证的普通 URL 不能被误伤。"""
         logger = TaskLogger()

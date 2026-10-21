@@ -16,9 +16,11 @@ from pathlib import Path
 from typing import Deque, List, Optional
 
 # 匹配 URL 中的 userinfo（user:password@）。
-# 只匹配紧跟在 :// 之后、且不含 / @ 空白 ? # 的一段，因此不会跨越路径或查询串，
+# 用 `*` 而不是 `+`：贪婪匹配到最后一个 @，这样密码里直接写了 @ 时也能整体抹掉。
+# 例如 socks5://user:p@ss@host 若只匹配到第一个 @，会漏出 "ss" 这段密码。
+# 字符类排除 / 空白 ? #，因此不会跨越路径或查询串，
 # 避免把 `...?email=a@b.com` 这类普通 URL 误伤成 `...?email=***@b.com`。
-_USERINFO_RE = re.compile(r"(://)[^/@\s?#]+@")
+_USERINFO_RE = re.compile(r"(://)[^/\s?#]*@")
 
 
 def _redact(text: str) -> str:

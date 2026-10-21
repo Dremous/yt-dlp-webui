@@ -280,6 +280,15 @@ class DownloadManager:
         with self._lock:
             return len(self.tasks)
 
+    def count_ended(self) -> int:
+        """已结束的任务数（全量）。
+
+        snapshot() 会被 limit 截断，前端拿它统计「有没有可清理的任务」时
+        会漏掉列表之外的那些，所以单独提供一个不受 limit 影响的计数。
+        """
+        with self._lock:
+            return sum(1 for t in self.tasks.values() if t.status in ENDED_STATES)
+
     # ------------------------------------------------------------------
     # 任务删除（只处理已结束的任务，避免与后台线程争抢同一目录）
     # ------------------------------------------------------------------
@@ -301,7 +310,10 @@ class DownloadManager:
             del self.tasks[task_id]
 
         # 目录清理放在锁外：rmtree 可能较慢，不该阻塞其他任务的状态读取。
-        # 与后台线程并发是安全的——取消时线程也会 rmtree，两边都用 ignore_errors。
+        # 这里只是「尽力删除」：取消后后台线程要等下一次 progress hook 才退出，
+        # 两边可能同时动这个目录。rmtree 都带 ignore_errors 所以不会抛。
+        # 与失败日志落盘的竞态由 _report_failure 兜底：它在落盘前后各查一次
+        # 任务是否还在，必要时把刚写回的目录再删掉。
         discard = task.status in ("failed", "cancelled")
         if discard:
             shutil.rmtree(self.download_dir / task_id, ignore_errors=True)
@@ -399,28 +411,46 @@ class DownloadManager:
             except OSError:
                 pass
 
+    def _is_live(self, task_id: str) -> bool:
+        """任务记录是否还在，用于判断失败处理途中是否被用户删除。"""
+        with self._lock:
+            return task_id in self.tasks
+
     def _report_failure(self, task: DownloadTask, task_dir: Path,
                         task_logger: TaskLogger, exc: Exception) -> str:
         """留下失败现场：日志落盘 + 打印到容器日志 + 返回给前端的单行摘要。
 
         间歇性故障（例如偶发 403）无法预先复现，只能在失败当时把证据留住：
         否则下次依然只看到一句 "HTTP Error 403"，排查只能靠手动绕开 WebUI 跑命令。
+
+        与 remove_task 的并发（两次检查缺一不可）：
+        - 落盘前查一次：任务已删就不写。write() 会 mkdir 父目录，会把刚被
+          rmtree 的目录重新建出来。
+        - 落盘后再查一次：这中间 remove_task 可能刚好删完记录、清完目录，
+          此时必须把刚写的日志目录回收，否则留下没有任务记录的孤儿目录。
         """
         log_path = task_dir / LOG_NAME
         log_rel: Optional[str] = None
         lines = task_logger.redacted_lines()
-        if lines:
+
+        if lines and self._is_live(task.id):
             try:
                 task_logger.write(log_path)
                 log_rel = f"{task.id}/{LOG_NAME}"
             except OSError:
                 pass  # 落盘失败（磁盘满/目录被删）不能影响任务状态，摘要仍会给
 
-            # 同时打印到 stderr，这样 docker logs 就能直接看到失败原因
-            tail = lines[-LOG_TAIL_LINES:]
-            print(f"[download] 任务 {task.id} 失败，yt-dlp 日志末 {len(tail)} 行：",
-                  file=sys.stderr)
-            print("\n".join(tail), file=sys.stderr)
+            if log_rel and not self._is_live(task.id):
+                # 写盘期间任务被删：目录连同刚落盘的日志一起回收
+                shutil.rmtree(task_dir, ignore_errors=True)
+                log_rel = None
+
+            if log_rel:
+                # 同时打印到 stderr，这样 docker logs 就能直接看到失败原因
+                tail = lines[-LOG_TAIL_LINES:]
+                print(f"[download] 任务 {task.id} 失败，yt-dlp 日志末 {len(tail)} 行：",
+                      file=sys.stderr)
+                print("\n".join(tail), file=sys.stderr)
 
         # 前端把 error 渲染在单个 <p> 里，\n 会折叠成空格，所以只给一行摘要
         summary = (task_logger.error_summary() or str(exc))[:400]
@@ -455,7 +485,11 @@ class DownloadManager:
         return newest.relative_to(self.download_dir).as_posix()
 
     def _trim_tasks(self) -> None:
-        """任务数超上限时清理：先清已完成/失败/已取消，仍超再取消并清最老的排队任务。"""
+        """任务数超上限时清理：先清已完成/失败/已取消，仍超再取消并清最老的排队任务。
+
+        注意：这里只删任务记录，**不回收磁盘**——自动裁剪是背压手段，不是清理动作。
+        失败/取消任务残留的 .part 与日志要靠界面上的「删除」或「清理已结束」回收。
+        """
         if len(self.tasks) < MAX_TASKS:
             return
         # 第一优先：清理已完成/失败/已取消的最老任务（cancelled 的线程已自查返回，删除安全）

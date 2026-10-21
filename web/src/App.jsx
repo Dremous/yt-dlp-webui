@@ -15,6 +15,8 @@ export default function App() {
   const [formats, setFormats] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [taskTotal, setTaskTotal] = useState(0);
+  // 已结束任务的全量计数（后端统计，不受列表 limit 影响）
+  const [taskEnded, setTaskEnded] = useState(0);
   const [files, setFiles] = useState([]);
   const [cookieOn, setCookieOn] = useState(false);
   const [proxy, setProxy] = useState({ active: false, url: "" });
@@ -48,6 +50,7 @@ export default function App() {
         if (seq === tasksSeq.current) {
           setTasks(data.tasks);
           setTaskTotal(data.total);
+          setTaskEnded(data.ended ?? 0);
         }
       })
       .catch((e) => console.warn("加载任务失败", e));
@@ -125,7 +128,12 @@ export default function App() {
       </motion.div>
 
       <motion.div variants={cardItem} className="mt-4">
-        <TaskList tasks={tasks} onChanged={refreshTasks} total={taskTotal} />
+        <TaskList
+          tasks={tasks}
+          onChanged={refreshTasks}
+          total={taskTotal}
+          ended={taskEnded}
+        />
       </motion.div>
 
       <motion.div variants={cardItem} className="mt-4">

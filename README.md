@@ -227,7 +227,7 @@ python -m unittest discover -s tests -v
 | GET | `/` | Web 界面 |
 | GET | `/api/formats` | 可用输出格式 |
 | POST | `/api/download` | 提交下载任务，body: `{"url": "...", "format": "mp4"}` |
-| GET | `/api/tasks?limit=N` | 任务列表（含进度；可选 limit 限制条数，默认 30，上限 200） |
+| GET | `/api/tasks?limit=N` | 任务列表（含进度与全量已结束计数 `ended`；limit 默认 30，上限 50） |
 | POST | `/api/tasks/{task_id}/cancel` | 取消排队/下载中的任务（失败/已取消任务不可取消） |
 | DELETE | `/api/tasks/{task_id}` | 删除一个已结束的任务记录（失败/取消的任务连带清理任务目录，已完成的保留文件） |
 | POST | `/api/tasks/cleanup` | 清理全部已结束的任务记录，返回实际删除数量 |
@@ -242,6 +242,9 @@ python -m unittest discover -s tests -v
 | DELETE | `/api/proxy` | 清除代理，恢复直连 |
 | POST | `/api/proxy/test` | 测试代理能否连通 YouTube（body 可传 `{"url": "..."}` 测未保存的地址） |
 | GET | `/api/about` | 应用信息（版本 / yt-dlp 版本 / 作者） |
+
+> 清理接口用 `POST` 而不是 `DELETE /api/tasks`，是为了避免被误读成「删除全部任务」，包括正在下载的那些。
+> 任务记录最多保留 50 条，超出时自动裁剪最旧的记录，但**不会删除磁盘文件**——回收残留要靠上面两个接口。
 
 ## 项目结构
 

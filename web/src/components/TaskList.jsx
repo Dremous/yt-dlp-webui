@@ -54,15 +54,11 @@ function pendingMessage(pending) {
   return "将移除任务记录，并清理该任务的临时文件与日志。";
 }
 
-export default function TaskList({ tasks, onChanged, total }) {
+export default function TaskList({ tasks, onChanged, total, ended = 0 }) {
   const shown = tasks.slice(0, 30);
   // 待删除目标：{ kind: "one", task } 或 { kind: "all" }；null 表示弹窗空闲
   const [pending, setPending] = useState(null);
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
-
-  // 只统计当前可见的任务，用来决定是否显示「清理已结束」按钮；
-  // 真正的清理范围是全部已结束任务，所以按钮上不写数字。
-  const endedCount = shown.filter((t) => ENDED_STATES.includes(t.status)).length;
 
   function askDelete(task) {
     setPending({ kind: "one", task });
@@ -112,7 +108,7 @@ export default function TaskList({ tasks, onChanged, total }) {
           <h2 className="text-base font-semibold text-white">下载任务</h2>
         </div>
         <div className="flex items-center gap-2">
-          {endedCount > 0 && (
+          {ended > 0 && (
             <Button
               size="sm"
               disableRipple
@@ -120,6 +116,7 @@ export default function TaskList({ tasks, onChanged, total }) {
               color="danger"
               onPress={askCleanup}
               className="transition-ui"
+              title="清理全部已结束任务（包括列表之外的）"
               startContent={<Trash size={14} weight="bold" aria-hidden="true" />}
             >
               清理已结束
@@ -175,7 +172,7 @@ export default function TaskList({ tasks, onChanged, total }) {
                   {pending?.kind === "all" ? "清理已结束任务" : "删除任务"}
                 </ModalHeader>
                 <ModalBody>
-                  <p className="text-sm text-slate-300 break-all">
+                  <p className="text-sm text-slate-300 break-words">
                     {pendingMessage(pending)}
                   </p>
                 </ModalBody>
