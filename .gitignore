@@ -24,3 +24,5 @@ app/static/
 yt-dlp-webui.zip
 .tmp-tool-results/
 /AGENTS.md
+.agents/
+skills-lock.json

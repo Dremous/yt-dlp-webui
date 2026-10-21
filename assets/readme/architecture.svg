@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360"
+     role="img" aria-labelledby="archTitle archDesc"
+     font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <title id="archTitle">yt-dlp WebUI 下载链路</title>
+  <desc id="archDesc">浏览器向 Docker 容器内的 FastAPI 提交任务；FastAPI 调用 yt-dlp（内置 deno 解 JS 挑战）抓取 YouTube，产物与配置写入挂载卷。代理只作用于 yt-dlp 的出站请求。</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6"
+            orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="360" rx="24" fill="#0a0f1c"/>
+
+  <!-- 容器边界 -->
+  <rect x="300" y="76" width="568" height="208" rx="16" fill="none" stroke="#2a3450" stroke-dasharray="7 6"/>
+  <text x="312" y="66" font-size="15" fill="#64748b"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace">DOCKER 容器</text>
+
+  <!-- 浏览器 -->
+  <rect x="56" y="112" width="180" height="116" rx="14" fill="#131c2e" stroke="#2a3450"/>
+  <text x="146" y="162" font-size="24" font-weight="600" fill="#f8fafc" text-anchor="middle">浏览器</text>
+  <text x="146" y="192" font-size="16" fill="#94a3b8" text-anchor="middle">粘贴链接</text>
+
+  <!-- FastAPI -->
+  <rect x="330" y="112" width="210" height="116" rx="14" fill="#131c2e" stroke="#2a3450"/>
+  <text x="435" y="162" font-size="24" font-weight="600" fill="#f8fafc" text-anchor="middle">FastAPI</text>
+  <text x="435" y="192" font-size="16" fill="#94a3b8" text-anchor="middle">任务队列 · 进度</text>
+
+  <!-- yt-dlp + deno -->
+  <rect x="628" y="112" width="210" height="116" rx="14" fill="#131c2e" stroke="#22c55e" stroke-opacity="0.45"/>
+  <text x="733" y="162" font-size="24" font-weight="600" fill="#f8fafc" text-anchor="middle">yt-dlp + deno</text>
+  <text x="733" y="192" font-size="16" fill="#94a3b8" text-anchor="middle">提取 · 解 JS 挑战</text>
+
+  <!-- YouTube -->
+  <rect x="952" y="112" width="192" height="116" rx="14" fill="#131c2e" stroke="#2a3450"/>
+  <text x="1048" y="162" font-size="24" font-weight="600" fill="#f8fafc" text-anchor="middle">YouTube</text>
+  <text x="1048" y="192" font-size="16" fill="#94a3b8" text-anchor="middle">视频源</text>
+
+  <!-- 链路箭头 -->
+  <line x1="236" y1="170" x2="328" y2="170" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="540" y1="170" x2="626" y2="170" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="838" y1="170" x2="950" y2="170" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <text x="282" y="190" font-size="14" fill="#64748b" text-anchor="middle"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace">HTTP</text>
+  <text x="583" y="190" font-size="14" fill="#64748b" text-anchor="middle"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Python API</text>
+  <text x="894" y="190" font-size="14" fill="#64748b" text-anchor="middle"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace">HTTPS / 代理</text>
+
+  <!-- 持久化卷 -->
+  <text x="330" y="262" font-size="15" fill="#64748b"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace">↓ /downloads · /config</text>
+
+  <text x="64" y="330" font-size="18" fill="#94a3b8">代理只作用于 yt-dlp 的出站请求，不影响浏览器访问 WebUI。</text>
+</svg>
