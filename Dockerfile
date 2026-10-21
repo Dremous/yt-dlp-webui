@@ -8,7 +8,7 @@
 
 # 必须在第一个 FROM 之前声明：只有全局作用域的 ARG 才能参与 FROM 的变量替换。
 # 若 denoland/deno 上该 tag 不存在，改成 bin-latest 即可。
-ARG DENO_VERSION=2.4.0
+ARG DENO_VERSION=2.9.7
 
 # ---------- 阶段一：前端构建 ----------
 # --platform=$BUILDPLATFORM：前端产物是纯静态 JS/HTML/CSS，与目标架构无关。
