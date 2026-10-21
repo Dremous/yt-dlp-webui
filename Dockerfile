@@ -2,8 +2,13 @@
 # yt-dlp WebUI - 多阶段构建
 #
 # 阶段一：构建 HeroUI 前端（node 构建产物输出到 app/static）
-# 阶段二：后端运行时（python + ffmpeg + 静态前端）
+# 阶段二：取 JavaScript 运行时（deno，供 yt-dlp 的 EJS 使用）
+# 阶段三：后端运行时（python + ffmpeg + deno + 静态前端）
 # ==========================================================================
+
+# 必须在第一个 FROM 之前声明：只有全局作用域的 ARG 才能参与 FROM 的变量替换。
+# 若 denoland/deno 上该 tag 不存在，改成 bin-latest 即可。
+ARG DENO_VERSION=2.4.0
 
 # ---------- 阶段一：前端构建 ----------
 # --platform=$BUILDPLATFORM：前端产物是纯静态 JS/HTML/CSS，与目标架构无关。
@@ -21,14 +26,21 @@ RUN npm ci --no-fund
 COPY web/ ./
 RUN npm run build
 
-# ---------- 阶段二：后端运行时 ----------
+# ---------- 阶段二：JavaScript 运行时 ----------
+# yt-dlp 用 EJS 解决 YouTube 的 JS 挑战（n 参数 / signature），必须配一个外部运行时。
+# 官方推荐 deno 且默认启用；这里从官方 bin 镜像取静态二进制，避免 apt 源里没有 deno。
+# 多架构构建时按目标平台自动选对应架构的二进制（amd64 / arm64 均有）。
+FROM denoland/deno:bin-${DENO_VERSION} AS deno-bin
+
+# ---------- 阶段三：后端运行时 ----------
 FROM python:3.13-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DOWNLOAD_DIR=/downloads \
     COOKIE_FILE=/config/cookies.txt \
-    PROXY_FILE=/config/proxy.txt
+    PROXY_FILE=/config/proxy.txt \
+    DENO_NO_UPDATE_CHECK=1
 
 # 镜像标签版本（构建时由 workflow 注入 DATE-SHORT_SHA），供「关于」界面显示
 ARG APP_VERSION=dev
@@ -43,6 +55,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# deno：yt-dlp 的 JS 运行时。构建期执行一次 --version，
+# 若把错架构的二进制拷进来会在这里立刻失败，而不是等到用户下载时才暴露。
+COPY --from=deno-bin /deno /usr/local/bin/deno
+RUN deno --version
+
 # 后端基础依赖（fastapi / uvicorn）
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -50,6 +67,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # yt-dlp：每次构建从 GitHub nightly-builds 拉取最新 nightly 源码安装
 RUN pip install --no-cache-dir --upgrade \
     "yt-dlp @ https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp.tar.gz"
+
+# yt-dlp-ejs：EJS 挑战求解脚本。官方要求与 JS 运行时配套安装，缺了它 YouTube
+# 提取会退化为「部分格式缺失」。用 tarball URL 安装 yt-dlp 不会解析 [default] extras，
+# 因此这里显式单独安装，并立即验证能被导入（装了但导入失败是常见的失败模式）。
+RUN pip install --no-cache-dir --upgrade yt-dlp-ejs \
+    && python -c "import yt_dlp_ejs" && echo "yt-dlp-ejs OK"
 
 # 后端代码 + 构建好的前端产物
 COPY app ./app

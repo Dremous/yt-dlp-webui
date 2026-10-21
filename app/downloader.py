@@ -9,6 +9,7 @@
 
 import os
 import shutil
+import sys
 import threading
 import time
 import urllib.parse
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import yt_dlp
+
+from .tasklog import TaskLogger
 
 # ---------------------------------------------------------------------------
 # 输出格式预设
@@ -55,10 +58,16 @@ MAX_CONCURRENT = 5     # 最大并发下载数
 MAX_TASKS = 50         # 内存中保留的最大任务记录数（正常手工下载几乎不会触顶，仅防脚本刷任务）
 
 # 下载中可能残留的临时/中间文件后缀，不视作最终产物（列表扫描时同样过滤）
+# 注意：.log 是失败时留下的排查日志，必须排除，否则会被当成下载好的成品返回给前端
 TMP_SUFFIXES = (
     ".part", ".ytdl", ".tmp", ".temp", ".webp",
-    ".jpg", ".png", ".description", ".info.json",
+    ".jpg", ".png", ".description", ".info.json", ".log",
 )
+
+# 失败时保留在任务子目录里的 yt-dlp 详细日志文件名
+LOG_NAME = "yt-dlp.log"
+# 失败时打印到容器日志（docker logs）的末段行数
+LOG_TAIL_LINES = 30
 
 # 允许的代理协议：socks5h 表示由代理端解析域名，容器/远程代理场景更省事
 ALLOWED_PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
@@ -288,12 +297,18 @@ class DownloadManager:
         task_dir.mkdir(parents=True, exist_ok=True)
 
         task.status = "downloading"
+        # 收集 yt-dlp 的详细日志：失败时脱敏后落盘，并在容器日志里打印末段。
+        # 日志只在内存缓冲（最多 2000 行），下载成功即随对象丢弃，不占磁盘。
+        task_logger = TaskLogger()
         opts = {
             "outtmpl": str(task_dir / "%(title).100B [%(id)s].%(ext)s"),
             "noplaylist": True,          # 只下载单个视频，不展开播放列表
             "noprogress": True,
-            "quiet": True,
-            "no_warnings": True,
+            # verbose + 自定义 logger：把 debug 级输出交给 TaskLogger。
+            # 这里刻意不设 quiet / no_warnings —— 它们会把错误原因静音，
+            # 像偶发 403 这类问题就完全无从排查。
+            "verbose": True,
+            "logger": task_logger,
             "progress_hooks": [lambda d: self._hook(d, task)],
             # 后期阶段（转码/合并）也会回调，保证取消在 postprocessing 也能生效
             "postprocessor_hooks": [lambda d: self._hook(d, task)],
@@ -327,16 +342,43 @@ class DownloadManager:
             shutil.rmtree(task_dir, ignore_errors=True)
         except Exception as exc:  # noqa: BLE001 - 需要把任意下载异常反馈给前端
             task.status = "failed"
-            task.error = str(exc)[:500]
             task.speed = None
             task.eta = None
             task.progress = 0.0
-            # 失败：仅清理空目录（保留可能的中间文件供排查/重试）
+            task.error = self._report_failure(task, task_dir, task_logger, exc)
+            # 失败：仅清理空目录（保留可能的中间文件与日志供排查/重试）
             try:
                 if not any(task_dir.iterdir()):
                     task_dir.rmdir()
             except OSError:
                 pass
+
+    def _report_failure(self, task: DownloadTask, task_dir: Path,
+                        task_logger: TaskLogger, exc: Exception) -> str:
+        """留下失败现场：日志落盘 + 打印到容器日志 + 返回给前端的单行摘要。
+
+        间歇性故障（例如偶发 403）无法预先复现，只能在失败当时把证据留住：
+        否则下次依然只看到一句 "HTTP Error 403"，排查只能靠手动绕开 WebUI 跑命令。
+        """
+        log_path = task_dir / LOG_NAME
+        log_rel: Optional[str] = None
+        lines = task_logger.redacted_lines()
+        if lines:
+            try:
+                task_logger.write(log_path)
+                log_rel = f"{task.id}/{LOG_NAME}"
+            except OSError:
+                pass  # 落盘失败（磁盘满/目录被删）不能影响任务状态，摘要仍会给
+
+            # 同时打印到 stderr，这样 docker logs 就能直接看到失败原因
+            tail = lines[-LOG_TAIL_LINES:]
+            print(f"[download] 任务 {task.id} 失败，yt-dlp 日志末 {len(tail)} 行：",
+                  file=sys.stderr)
+            print("\n".join(tail), file=sys.stderr)
+
+        # 前端把 error 渲染在单个 <p> 里，\n 会折叠成空格，所以只给一行摘要
+        summary = (task_logger.error_summary() or str(exc))[:400]
+        return f"{summary}｜完整日志：{log_rel}" if log_rel else summary
 
     def _hook(self, data: dict, task: DownloadTask) -> None:
         # 取消信号：一旦任务被标记为取消，立即终止 yt-dlp 下载
