@@ -201,7 +201,7 @@ YouTube 的播放地址带 JS 挑战（`n` 参数签名），yt-dlp 需要外部
 
 > 前置设置：GitHub 仓库 `Settings → Packages` 中启用 GHCR；首次使用时需为镜像设置可见性。
 > 无需额外密钥——workflow 使用内置的 `GITHUB_TOKEN` 自动完成 GHCR 登录。
-> 可选配置 `secrets.WEBHOOK_URL`（飞书 / 企业微信 / 钃钉机器人），构建失败时推送告警。
+> 可选配置 `secrets.WEBHOOK_URL`（飞书 / 企业微信 / 钉钉机器人），构建失败时推送告警。
 
 ### 本地开发
 
