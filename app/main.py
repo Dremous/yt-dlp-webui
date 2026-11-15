@@ -42,6 +42,7 @@ from .downloader import (
     normalize_proxy,
 )
 from .accesslog import install as install_access_log_filter
+from .logconfig import setup_logging
 from .store import TaskStore
 
 # 镜像标签版本：Docker 构建时由 workflow 注入（DATE-SHORT_SHA），本地开发回退为 dev
@@ -52,6 +53,10 @@ APP_VERSION = os.environ.get("APP_VERSION", "dev")
 install_access_log_filter(
     disabled=os.environ.get("ACCESS_LOG_QUIET", "1").lower() in ("0", "false", "off", "no")
 )
+
+# 容器走 app.serve，本地开发用 uvicorn app.main:app；两个入口都读同一组 LOG_* 变量。
+# setup_logging 幂等，serve 里已经调过也不会重复挂 handler。
+setup_logging()
 
 # ---------------------------------------------------------------------------
 # 下载目录、Cookie 文件与代理配置（容器内可通过环境变量覆盖）
