@@ -279,7 +279,8 @@ function TaskItem({ task, onChanged, onDelete }) {
           className="max-w-full"
           color={progressColor(task.status)}
         />
-        {task.status === "downloading" && (
+        {/* 合并/转码阶段没有字节流量，流光会让「已经下完」看起来还在动，这里停掉 */}
+        {task.status === "downloading" && !task.stage && (
           <span
             className="pointer-events-none absolute inset-0 overflow-hidden rounded-full"
             aria-hidden="true"
@@ -295,8 +296,12 @@ function TaskItem({ task, onChanged, onDelete }) {
             <span className="tabular-nums text-slate-300">
               {Math.round(task.progress)}%
             </span>
-            {task.speed && <span>{task.speed}</span>}
-            {task.eta && <span>剩余 {task.eta}</span>}
+            {task.stage ? (
+              <span className="text-amber-300">{task.stage}</span>
+            ) : (
+              task.speed && <span>{task.speed}</span>
+            )}
+            {!task.stage && task.eta && <span>剩余 {task.eta}</span>}
           </>
         )}
         <span className="flex-1 truncate text-slate-300">{title}</span>

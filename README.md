@@ -18,7 +18,8 @@
 
 - **多档输出格式**：默认「最佳格式」（不转码，直接拿站点最高画质）；MP4 另有 4K 到 480p 逐档可选
   与 H.264 兼容版；音频支持 MP3 三档码率，以及不转码的原始音频
-- **实时进度**：百分比、速度、剩余时间，每 1.5 秒刷新
+- **实时进度**：百分比、速度、剩余时间，每 1.5 秒刷新；音视频分离的站点按两条流的合计进度推进，
+  不会在下完视频轨后掉回 0 再走一遍；合并 / 转码阶段单独标出，不再显示成「下载中」
 - **并发任务**：最多 5 个同时下载，互不阻塞
 - **断点续传**：网络中断自动重试并续传（默认 20 次，指数退避）；大文件按块下载，单次断流最多回退到本块起点
   （块内断流还能靠 `.part` 从偏移继续，通常不必重下整块）；失败后重新提交同一链接，
@@ -243,7 +244,7 @@ python -m unittest discover -s tests -v
 | GET | `/` | Web 界面 |
 | GET | `/api/formats` | 可用输出格式 |
 | POST | `/api/download` | 提交下载任务，body: `{"url": "...", "format": "best"}`（`format` 缺省即 `best`）；取值见 `/api/formats` |
-| GET | `/api/tasks?limit=N` | 任务列表（含进度与全量已结束计数 `ended`；limit 默认 30，上限 50） |
+| GET | `/api/tasks?limit=N` | 任务列表（含进度、后期处理阶段 `stage` 与全量已结束计数 `ended`；limit 默认 30，上限 50） |
 | POST | `/api/tasks/{task_id}/cancel` | 取消排队/下载中的任务（失败/已取消任务不可取消） |
 | DELETE | `/api/tasks/{task_id}` | 删除一个已结束的任务记录（失败/取消的任务连带清理任务目录，已完成的保留文件） |
 | POST | `/api/tasks/cleanup` | 清理全部已结束的任务记录，返回实际删除数量 |
@@ -297,7 +298,8 @@ python -m unittest discover -s tests -v
     ├── test_task_lifecycle.py    # 任务删除与目录清理策略
     ├── test_resume_and_proxy.py  # 断点续传接管与代理地址规范化
     ├── test_formats.py           # 输出格式预设的完整性
-    └── test_chunk_size.py        # HTTP_CHUNK_SIZE 单位解析
+    ├── test_chunk_size.py        # HTTP_CHUNK_SIZE 单位解析
+    └── test_progress.py          # 多流进度累计与后期处理阶段
 ```
 
 ## 说明
