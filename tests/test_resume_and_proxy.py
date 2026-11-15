@@ -157,7 +157,27 @@ class AdoptPartialTest(unittest.TestCase):
 
         self.assertIn("2 个分片", summary)
         # 视频下完才会轮到音频，但两个残片都接管过来，音频一步就能接着下
-        self.assertEqual(len(list(new_dir.glob("*.part"))), 2)
+        self.assertEqual(len(list(new_dir.glob("*.part")), 2)
+
+    def test_fragments_and_ytdl_are_adopted(self):
+        """HLS/DASH 分片是 `.part-FragN`，断点续传也必须接管它们。"""
+        self._task("old", "failed")
+        frag = self._part("old", "video [id].f701.mp4.part-Frag12", 1024)
+        ytdl = self._part("old", "video [id].f701.mp4.ytdl", 20)
+        final = self._part("old", "video [id].mp4", 30)
+        task = self._task("new", "downloading")
+        new_dir = self.root / "new"
+        new_dir.mkdir()
+
+        summary = self.manager._adopt_partial(task, new_dir)
+
+        self.assertIn("2 个分片", summary)
+        self.assertFalse(frag.exists())
+        self.assertFalse(ytdl.exists())
+        self.assertTrue((new_dir / frag.name).exists())
+        self.assertTrue((new_dir / ytdl.name).exists())
+        self.assertTrue(final.exists(), "成品文件不能当临时文件搬走")
+        self.assertFalse((new_dir / final.name).exists())
 
     def test_existing_target_not_overwritten(self):
         self._task("old", "failed")
