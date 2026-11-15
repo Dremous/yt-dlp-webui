@@ -41,10 +41,17 @@ from .downloader import (
     DownloadManager,
     normalize_proxy,
 )
+from .accesslog import install as install_access_log_filter
 from .store import TaskStore
 
 # 镜像标签版本：Docker 构建时由 workflow 注入（DATE-SHORT_SHA），本地开发回退为 dev
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
+
+# 前端轮询会把 access log 刷满（1.5 秒一条 /api/tasks）。
+# 默认只静音成功的轮询请求，4xx/5xx 照旧打印；排查时可设 ACCESS_LOG_QUIET=0 恢复全量。
+install_access_log_filter(
+    disabled=os.environ.get("ACCESS_LOG_QUIET", "1").lower() in ("0", "false", "off", "no")
+)
 
 # ---------------------------------------------------------------------------
 # 下载目录、Cookie 文件与代理配置（容器内可通过环境变量覆盖）
