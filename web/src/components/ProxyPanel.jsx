@@ -133,7 +133,7 @@ export default function ProxyPanel({ active, current, onChanged }) {
             variant="bordered"
             isDisabled={disabled}
             className="flex-1 font-mono-ui"
-            description="支持 http / https / socks5 / socks5h，省略协议按 http 处理"
+            description="支持 http / https / socks5 / socks5h，省略协议按 http 处理；socks5 会自动按 socks5h（由代理端解析域名）使用"
           />
           <Button
             disableRipple

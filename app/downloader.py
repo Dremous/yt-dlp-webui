@@ -80,6 +80,12 @@ def normalize_proxy(url: str) -> str:
     """校验并规范化代理地址；非法时抛出 ValueError（中文提示，直接反馈给前端）。
 
     允许省略协议，如只填 `host.docker.internal:7890`，缺省按 http:// 处理。
+
+    `socks5://` 会被升级成 `socks5h://`：两者唯一的差别是域名由谁解析——
+    socks5 由客户端在本地解析（PySocks 默认 rdns=False），容器里的 DNS 往往拿到
+    被污染或离代理很远的 googlevideo 记录，连上去容易被对端直接 RST；
+    socks5h 把主机名交给代理端解析，与代理出口的地理位置一致，才是容器场景该用的。
+    输入仍接受 socks5（老配置不必手改），落盘与运行时一律用 socks5h。
     """
     raw = (url or "").strip()
     if not raw:
@@ -97,6 +103,9 @@ def normalize_proxy(url: str) -> str:
         raise ValueError("代理端口不合法（应为 0-65535 的整数）")
     if port is None:
         raise ValueError("代理地址必须带端口，例如 http://host.docker.internal:7890")
+    # 只改协议头，保留 userinfo / 主机 / 端口原样
+    if parsed.scheme == "socks5":
+        raw = "socks5h://" + raw.split("://", 1)[1]
     return raw
 
 
@@ -353,15 +362,25 @@ class DownloadManager:
         # 每个任务写入自己的子目录，产物互不干扰
         task_dir = self.download_dir / task.id
         task_dir.mkdir(parents=True, exist_ok=True)
+        # 重新提交同一链接时，把上次失败留下的 .part 接管过来，避免从头再下一遍
+        adopted = self._adopt_partial(task, task_dir)
 
         task.status = "downloading"
         # 收集 yt-dlp 的详细日志：失败时脱敏后落盘，并在容器日志里打印末段。
         # 日志只在内存缓冲（最多 2000 行），下载成功即随对象丢弃，不占磁盘。
         task_logger = TaskLogger()
+        if adopted:
+            task_logger.info(f"[webui] 接管上次未完成的分片：{adopted}，从断点续传")
         opts = {
             "outtmpl": str(task_dir / "%(title).100B [%(id)s].%(ext)s"),
             "noplaylist": True,          # 只下载单个视频，不展开播放列表
             "noprogress": True,
+            # 网络容错：Python API 里 retries 缺省为 0（CLI 的默认 10 是命令行层给的），
+            # 等于「断一次就整体放弃」。http 下载器重试时会从 .part 的字节数发 Range 续传，
+            # 所以大文件经代理下载被中途掐断时，有重试才不会白下一遍。
+            "retries": 20,               # 单文件（含续传）重试次数
+            "fragment_retries": 20,      # HLS/DASH 分片重试次数
+            "socket_timeout": 30,        # 单次 socket 读超时（秒），默认 20
             # verbose + 自定义 logger：把 debug 级输出交给 TaskLogger。
             # 这里刻意不设 quiet / no_warnings —— 它们会把错误原因静音，
             # 像偶发 403 这类问题就完全无从排查。
@@ -410,6 +429,65 @@ class DownloadManager:
                     task_dir.rmdir()
             except OSError:
                 pass
+
+    def _adopt_partial(self, task: DownloadTask, task_dir: Path) -> Optional[str]:
+        """把同一链接的历史任务留下的 .part 搬进本次任务目录，实现跨任务续传。
+
+        为什么需要它：任务目录按 task_id 隔离（删除策略与并发隔离都依赖这一点），
+        于是「失败后重新提交」天然落在新目录里——上次下了 90% 的 .part 留在旧目录，
+        yt-dlp 在新目录里从 0 开始，20GB 的视频等于白下一遍。
+
+        做法是开跑前用 os.replace 把残片改名搬过来：
+        - rename 在同一文件系统内是原子的，同一个 .part 只会被一个任务拿到，
+          并发提交同一链接不会出现两个线程写同一个文件；
+        - 目标目录已有同名文件时跳过，不覆盖；
+        - 搬走后旧目录只剩日志，删除历史任务不会误删正在续传的数据。
+
+        只从已结束（failed / cancelled / finished）的任务里取：正在下载的任务是活动写者，
+        它的 .part 不能动。同名的多个残片取最大的那份（重复失败时它最接近下完）。
+        返回给日志用的一句话摘要，没接管到任何东西时返回 None。
+        """
+        candidates = []
+        with self._lock:
+            donors = [
+                t.id for t in self.tasks.values()
+                if t.id != task.id and t.url == task.url and t.status in ENDED_STATES
+            ]
+        for donor_id in donors:
+            donor_dir = self.download_dir / donor_id
+            if not donor_dir.is_dir():
+                continue
+            for part in donor_dir.glob("*.part"):
+                try:
+                    size = part.stat().st_size
+                except OSError:
+                    continue
+                if size > 0:
+                    candidates.append((size, part))
+
+        if not candidates:
+            return None
+        # 按大小倒序：同名残片先遇到的就是最大的那份
+        candidates.sort(key=lambda item: item[0], reverse=True)
+
+        moved_count, moved_bytes, seen = 0, 0, set()
+        for size, part in candidates:
+            if part.name in seen:
+                continue
+            seen.add(part.name)
+            dst = task_dir / part.name
+            if dst.exists():
+                continue
+            try:
+                os.replace(part, dst)
+            except OSError:
+                continue  # 跨设备/权限问题：当作没接管，本次从头下载
+            moved_count += 1
+            moved_bytes += size
+
+        if not moved_count:
+            return None
+        return f"{moved_count} 个分片，共 {moved_bytes / 1024 / 1024:.1f} MiB"
 
     def _is_live(self, task_id: str) -> bool:
         """任务记录是否还在，用于判断失败处理途中是否被用户删除。"""
