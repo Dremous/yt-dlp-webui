@@ -270,7 +270,7 @@ class DownloadManager:
 
     def proxy_status(self) -> dict:
         """返回代理状态，供前端展示。"""
-        proxy = self.proxy
+        proxy = self._proxy
         if not proxy:
             return {"active": False, "url": None}
         return {"active": True, "url": proxy}
@@ -359,7 +359,7 @@ class DownloadManager:
     def remove_task(self, task_id: str) -> dict:
         """删除一个已结束的任务记录，返回 {"id", "removed_files"}。
 
-        磁盘策略（与界面的确认文案一致）：
+        磁盘策略（与界面上的确认文案一致）：
         - failed / cancelled：目录里只有 .part、.log 等残留，连目录一起删
         - finished：视频文件还有用，只删记录、保留目录
 
@@ -436,6 +436,15 @@ class DownloadManager:
             "retries": 20,               # 单文件（含续传）重试次数
             "fragment_retries": 20,      # HLS/DASH 分片重试次数
             "socket_timeout": 30,        # 单次 socket 读超时（秒），默认 20
+            # 重试间隔：又是「CLI 有、API 没有」的默认值——RetryManager 只在
+            # retry_sleep_functions 里拿到可调用对象时才 sleep，缺省是 None，
+            # 于是 20 次重试会在几百毫秒内连着重连一遍。对服务端来说这是刷流量，
+            # 很容易从「连接被掐」升级成 403；在 Clash 的连接面板里就是
+            # 「连上—断开—立刻再连」刷屏。这里给指数退避（1,2,4,…,30 秒封顶）。
+            "retry_sleep_functions": {
+                "http": lambda n: min(2 ** n, 30),
+                "fragment": lambda n: min(2 ** n, 30),
+            },
             # verbose + 自定义 logger：把 debug 级输出交给 TaskLogger。
             # 这里刻意不设 quiet / no_warnings —— 它们会把错误原因静音，
             # 像偶发 403 这类问题就完全无从排查。
