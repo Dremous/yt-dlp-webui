@@ -287,7 +287,7 @@ python -m unittest discover -s tests -v
 | GET | `/api/files` | 已下载文件列表 |
 | GET | `/files/{filename:path}` | 下载指定文件（相对路径，含任务子目录） |
 | DELETE | `/api/files/{filename:path}` | 删除指定文件 |
-| POST | `/api/cookies` | 上传 Cookie 文件（multipart，字段 `file`） |
+| POST | `/api/cookies` | 上传 Cookie 文件（multipart，字段 `file`；上限 5MB，超出返回 413） |
 | GET | `/api/cookies/status` | 查询 Cookie 状态 |
 | DELETE | `/api/cookies` | 清除 Cookie |
 | GET | `/api/proxy` | 查询代理状态 |
