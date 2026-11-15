@@ -224,13 +224,40 @@ def delete_file(filename: str):
 # ---------------------------------------------------------------------------
 # Cookie 导入 / 状态 / 清除
 # ---------------------------------------------------------------------------
+MAX_COOKIE_BYTES = 5 * 1024 * 1024
+_COOKIE_READ_CHUNK = 64 * 1024
+
+
+async def _read_cookie_upload(file: UploadFile) -> bytes:
+    """读取 Cookie 内容，最多 MAX_COOKIE_BYTES。
+
+    Starlette 的 multipart 解析器在写入临时文件时维护 UploadFile.size，先看它
+    可以在把文件读进内存前拒绝超大上传；size 不可用时按块读取，最多只多读 1
+    字节用于判断超限，不会一次把整个文件读进内存。
+    """
+    size = getattr(file, "size", None)
+    if size is not None and size > MAX_COOKIE_BYTES:
+        raise HTTPException(status_code=413, detail="Cookie 文件过大（上限 5MB）")
+
+    chunks = []
+    total = 0
+    while True:
+        # 多读 1 字节用于判断是否超限；这是唯一超出上限的内存占用
+        chunk = await file.read(min(_COOKIE_READ_CHUNK, MAX_COOKIE_BYTES + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_COOKIE_BYTES:
+            raise HTTPException(status_code=413, detail="Cookie 文件过大（上限 5MB）")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @app.post("/api/cookies")
 async def upload_cookie(file: UploadFile):
-    content = await file.read()
+    content = await _read_cookie_upload(file)
     if not content:
         raise HTTPException(status_code=400, detail="文件内容为空")
-    if len(content) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Cookie 文件过大（上限 5MB）")
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError:
