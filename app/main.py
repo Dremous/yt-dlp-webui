@@ -414,4 +414,11 @@ def about():
 # 静态前端
 # ---------------------------------------------------------------------------
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+# app/static 在 .gitignore 里，干净 clone 本地开发时还不存在；先建空目录，
+# 让 uvicorn 能起来（前端未构建时 / 返回 404，构建后即可用）。只读部署
+# 下 mkdir 失败也不影响启动，交给 check_dir=False 处理。
+try:
+    STATIC_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
+app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True, check_dir=False), name="static")

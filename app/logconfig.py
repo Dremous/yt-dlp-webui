@@ -94,13 +94,18 @@ def setup_logging(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
                 "日志文件不可用（%s）：%s；日志仅输出到控制台", file_path, exc
             )
 
-    # uvicorn 自带的 handler 若还在，会导致同一条日志写两遍；统一交给 root
+    # uvicorn 启动时（`uvicorn app.main:app`）会先装自己的 handler。只摘自己挂的
+    # handler 不够：消息会同时走 uvicorn 的 handler 和 root，控制台重复，且
+    # LOG_CONSOLE=0 关不掉 uvicorn 那份。这里把三个 logger 的 handler 全部摘掉，
+    # 统一交给 root；容器入口 app.serve 用 log_config=None，本来就没有它们。
     for name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
         logger = logging.getLogger(name)
         for handler in list(logger.handlers):
-            if getattr(handler, _OWNED, False):
-                logger.removeHandler(handler)
+            logger.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:  # noqa: BLE001 - 第三方 handler 关闭失败不该影响启动
+                pass
         logger.propagate = True
-        if logger.level == logging.NOTSET:
-            logger.setLevel(level)
+        logger.setLevel(level)
     return saved

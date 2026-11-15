@@ -57,6 +57,16 @@ class TaskStoreTest(unittest.TestCase):
         backups = list(Path(self._tmp.name).glob("tasks.db.corrupt-*"))
         self.assertEqual(len(backups), 1)
 
+    def test_unwritable_path_disables_store_without_crash(self):
+        # 配置卷只读、TASKS_DB 指向文件路径等情况下，mkdir/建库都会失败。
+        # 这时应降级为「本次运行不持久化」，而不是在 import 期抛 OSError。
+        blocker = Path(self._tmp.name) / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        store = TaskStore(blocker / "tasks.db")  # 父路径是文件，mkdir 必失败
+        self.assertFalse(store.available)
+        store.save(_task("x"))
+        self.assertEqual(store.load(), [])
+
     def test_delete(self):
         store = TaskStore(self.db)
         store.save(_task())

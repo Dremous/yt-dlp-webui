@@ -15,7 +15,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # 落盘的字段：速度 / 剩余时间是瞬时值，重启后必然过时，刻意不存
 _COLUMNS = (
@@ -29,23 +29,66 @@ def _row_to_dict(row: sqlite3.Row) -> Dict:
 
 
 class TaskStore:
-    """任务记录的读写。线程安全：每次调用开独立连接，写操作加锁串行。"""
+    """任务记录的读写。线程安全：每次调用开独立连接，写操作加锁串行。
+
+    路径不可用（配置卷只读、父路径是文件、磁盘满）时不会让进程崩掉：先尝试
+    隔离坏库重建；重建仍失败就降级为「本次运行不持久化」，WebUI 照常可用。
+    """
 
     def __init__(self, path):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._disabled = False
+        self._init_or_disable()
+
+    @property
+    def available(self) -> bool:
+        """当前是否真正在持久化（降级模式下 save/delete 是空操作）。"""
+        return not self._disabled
+
+    def _init_or_disable(self) -> None:
         try:
-            self._init_schema()
-        except (sqlite3.DatabaseError, sqlite3.OperationalError) as exc:
+            self._prepare_and_init()
+            return
+        except (sqlite3.DatabaseError, OSError) as exc:
             # 断电 / 磁盘写满后文件可能损坏。直接抛会让 import 阶段崩掉，
             # 容器在 restart: unless-stopped 下无限重启，WebUI 完全打不开。
-            # 所以先把坏文件挪走留证，再重建一张空表。
-            backup = self._quarantine()
+            backup = self._try_quarantine(exc)
+            try:
+                self._prepare_and_init()
+            except (sqlite3.DatabaseError, OSError) as retry_exc:
+                self._disabled = True
+                log = logging.getLogger(__name__)
+                if backup:
+                    log.warning(
+                        "任务库损坏（%s），已备份为 %s；重建失败，本次运行不持久化任务：%s",
+                        exc, backup.name, retry_exc,
+                    )
+                else:
+                    log.warning(
+                        "任务库不可用（%s），本次运行不持久化任务：%s",
+                        self.path, retry_exc,
+                    )
+                return
+            if backup:
+                logging.getLogger(__name__).warning(
+                    "任务库损坏（%s），已备份为 %s 并重建", exc, backup.name
+                )
+
+    def _prepare_and_init(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_schema()
+
+    def _try_quarantine(self, exc: Exception) -> Optional[Path]:
+        if not self.path.exists():
+            return None
+        try:
+            return self._quarantine()
+        except OSError as qexc:
             logging.getLogger(__name__).warning(
-                "任务库损坏（%s），已备份为 %s 并重建", exc, backup.name
+                "任务库损坏且无法隔离（%s）：%s", exc, qexc
             )
-            self._init_schema()
+            return None
 
     def _quarantine(self) -> Path:
         """把不可用的库文件改名留证；挪不动时抛 OSError（磁盘/权限问题另说）。"""
@@ -89,6 +132,8 @@ class TaskStore:
 
     def save(self, task) -> None:
         """写入或更新一条任务记录（按 id UPSERT）。"""
+        if self._disabled:
+            return
         values = tuple(getattr(task, name, None) for name in _COLUMNS)
         placeholders = ", ".join("?" for _ in _COLUMNS)
         updates = ", ".join(f"{name} = excluded.{name}" for name in _COLUMNS if name != "id")
@@ -105,6 +150,8 @@ class TaskStore:
                 conn.close()
 
     def delete(self, task_id: str) -> None:
+        if self._disabled:
+            return
         with self._lock:
             conn = self._connect()
             try:
@@ -115,6 +162,8 @@ class TaskStore:
 
     def load(self) -> List[Dict]:
         """按创建时间升序返回全部记录（恢复时取尾部的最新若干条）。"""
+        if self._disabled:
+            return []
         with self._lock:
             conn = self._connect()
             try:

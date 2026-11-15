@@ -62,6 +62,21 @@ class LogConfigTest(unittest.TestCase):
             setup_logging(env)
             self.assertEqual(len(logging.getLogger().handlers), 1)
 
+    def test_uvicorn_default_handlers_are_removed(self):
+        # uvicorn CLI 会在 uvicorn / uvicorn.error / uvicorn.access 上装自己的
+        # handler；只摘 _OWNED 的话，同一条日志既走 uvicorn handler 又走 root，
+        # 控制台会重复，LOG_CONSOLE=0 也关不掉
+        access = logging.getLogger("uvicorn.access")
+        stray = logging.StreamHandler()
+        access.addHandler(stray)
+        try:
+            setup_logging({"LOG_FILE": "none", "LOG_CONSOLE": "0"})
+            self.assertNotIn(stray, access.handlers)
+            self.assertTrue(access.propagate)
+        finally:
+            if stray in access.handlers:
+                access.removeHandler(stray)
+
 
 if __name__ == "__main__":
     unittest.main()
