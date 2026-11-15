@@ -35,7 +35,7 @@ docker run -d --name yt-dlp-webui \
   ghcr.io/dremous/yt-dlp-webui:latest
 ```
 
-打开 **http://localhost:8080**，粘贴链接即可下载。
+打开 [http://localhost:8080](http://localhost:8080)，粘贴链接即可下载。
 
 需要持久化目录说明、Docker Compose、从源码构建或输出格式对照表，见
 [快速开始与使用](docs/quickstart.md)。
