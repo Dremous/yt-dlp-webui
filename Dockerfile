@@ -84,7 +84,8 @@ RUN pip install --no-cache-dir --upgrade yt-dlp-ejs \
 COPY app ./app
 COPY --from=web-builder /app/app/static ./app/static
 
-EXPOSE 8080
+# 端口由运行时 PORT 决定，不写静态 EXPOSE（写死 8080 会与自定义 PORT 不一致）。
+# 发布端口请使用 `docker run -p 8080:8080` 或 compose 的 ports 映射。
 
 # 健康检查：curl 探活 API 端点（端口跟 serve.py 的 PORT 保持一致）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
