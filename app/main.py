@@ -210,15 +210,20 @@ def delete_file(filename: str):
     path = _resolve_in_downloads(filename)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
-    path.unlink()
-    # 若父目录是任务子目录且已空，一并清理
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="文件不存在") from None
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"删除文件失败：{exc}") from exc
+    # 若父目录是任务子目录且已空，一并清理；并发删除时失败不影响主操作
     root = DOWNLOAD_DIR.resolve()
     parent = path.parent
-    if parent != root and not any(parent.iterdir()):
-        try:
+    try:
+        if parent != root and not any(parent.iterdir()):
             parent.rmdir()
-        except OSError:
-            pass
+    except OSError:
+        pass
     return {"ok": True, "deleted": path.name}
 
 

@@ -23,6 +23,19 @@ _COLUMNS = (
     "stage", "title", "filename", "error", "created",
 )
 
+# SQLite 的“锁库”是暂时状态：别的连接可能正在提交，等一会儿通常能成功。
+# 不能和磁盘满 / 文件损坏一样直接永久降级，否则一次瞬时锁库会让本次运行
+# 剩下的任务全部不落盘。
+_MAX_LOCK_RETRIES = 3
+_LOCK_RETRY_SLEEP = 0.05
+
+
+def _is_transient_lock(exc: Exception) -> bool:
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+    msg = str(exc).lower()
+    return "locked" in msg or "busy" in msg
+
 
 def _row_to_dict(row: sqlite3.Row) -> Dict:
     return {name: row[name] for name in _COLUMNS}
@@ -139,6 +152,25 @@ class TaskStore:
             "任务库运行时不可用，本次运行停止持久化任务：%s", exc
         )
 
+    def _with_retry(self, operation):
+        """执行一次 SQLite 操作；只对临时的 locked/busy 做有限重试。"""
+        for attempt in range(_MAX_LOCK_RETRIES):
+            try:
+                return operation()
+            except (sqlite3.DatabaseError, OSError) as exc:
+                if attempt == _MAX_LOCK_RETRIES - 1 or not _is_transient_lock(exc):
+                    raise
+                time.sleep(_LOCK_RETRY_SLEEP * (attempt + 1))
+
+    def _save_once(self, sql: str, values: tuple) -> None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(sql, values)
+                conn.commit()
+            finally:
+                conn.close()
+
     def save(self, task) -> None:
         """写入或更新一条任务记录（按 id UPSERT）。"""
         if self._disabled:
@@ -151,48 +183,48 @@ class TaskStore:
             f"ON CONFLICT(id) DO UPDATE SET {updates}"
         )
         try:
-            with self._lock:
-                conn = self._connect()
-                try:
-                    conn.execute(sql, values)
-                    conn.commit()
-                finally:
-                    conn.close()
+            self._with_retry(lambda: self._save_once(sql, values))
         except (sqlite3.DatabaseError, OSError) as exc:
             # 旧实现会让异常穿透后台下载线程，任务永远停在 downloading。
             self._disable(exc)
+
+    def _delete_once(self, task_id: str) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+                conn.commit()
+            finally:
+                conn.close()
+        return True
 
     def delete(self, task_id: str) -> bool:
         if self._disabled:
             return False
         try:
-            with self._lock:
-                conn = self._connect()
-                try:
-                    conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-                    conn.commit()
-                finally:
-                    conn.close()
+            return self._with_retry(lambda: self._delete_once(task_id))
         except (sqlite3.DatabaseError, OSError) as exc:
             self._disable(exc)
             return False
-        return True
+
+    def _load_once(self) -> List[Dict]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    f"SELECT {', '.join(_COLUMNS)} FROM tasks ORDER BY created"
+                ).fetchall()
+            finally:
+                conn.close()
+        return [_row_to_dict(row) for row in rows]
 
     def load(self) -> List[Dict]:
         """按创建时间升序返回全部记录（恢复时取尾部的最新若干条）。"""
         if self._disabled:
             return []
         try:
-            with self._lock:
-                conn = self._connect()
-                try:
-                    rows = conn.execute(
-                        f"SELECT {', '.join(_COLUMNS)} FROM tasks ORDER BY created"
-                    ).fetchall()
-                finally:
-                    conn.close()
+            return self._with_retry(self._load_once)
         except (sqlite3.DatabaseError, OSError) as exc:
             # 启动恢复阶段读库失败也不能让 import 崩掉；按空任务列表继续。
             self._disable(exc)
             return []
-        return [_row_to_dict(row) for row in rows]
