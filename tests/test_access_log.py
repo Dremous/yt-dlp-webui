@@ -21,10 +21,14 @@ class QuietPollingFilterTest(unittest.TestCase):
     def test_quiet_successful_polling(self):
         self.assertFalse(self.filter.filter(_record("GET", "/api/tasks?limit=30", 200)))
         self.assertFalse(self.filter.filter(_record("GET", "/api/files", 200)))
+        # Docker HEALTHCHECK 每 30 秒探一次 /api/formats
+        self.assertFalse(self.filter.filter(_record("GET", "/api/formats", 200)))
 
     def test_keep_polling_errors(self):
         self.assertTrue(self.filter.filter(_record("GET", "/api/tasks?limit=30", 500)))
         self.assertTrue(self.filter.filter(_record("GET", "/api/tasks", 404)))
+        # 健康检查失败时要能看见（容器被标 unhealthy 的线索）
+        self.assertTrue(self.filter.filter(_record("GET", "/api/formats", 500)))
 
     def test_keep_other_endpoints(self):
         self.assertTrue(self.filter.filter(_record("POST", "/api/download", 200)))

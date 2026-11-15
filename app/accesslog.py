@@ -8,7 +8,8 @@
 import logging
 from typing import Iterable
 
-QUIET_PATHS = ("/api/tasks", "/api/files")
+# 前端轮询 + Docker 健康检查（每 30 秒一次 /api/formats）
+QUIET_PATHS = ("/api/tasks", "/api/files", "/api/formats")
 
 
 class QuietPollingFilter(logging.Filter):

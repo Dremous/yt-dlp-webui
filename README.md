@@ -32,7 +32,7 @@
 | 输出格式 | 产物 |
 |---|---|
 | 最佳格式（默认） | 不改编码与容器，直接取站点最高画质，可能是 webm / AV1 |
-| MP4 视频（最高 mp4 画质） | 不限分辨率，mp4 视频 + m4a 音频合并 |
+| MP4 视频（最高 mp4 画质） | 不限分辨率，直接取站点最高画质 + m4a 音频合并 |
 | MP4 4K / 2K / 1080p / 720p / 480p | 按分辨率上限选流，源更高时自动降档 |
 | MP4 H.264 | 优先 `avc1`，老设备与剪辑软件只认它 |
 | MP3 320 / 192 / 128 kbps | 只下音轨后转码 |
@@ -50,6 +50,7 @@
 - **多架构**：同时构建 `linux/amd64` 与 `linux/arm64`，服务器和 ARM NAS 通用
 - **安全设计**：URL 全部走 yt-dlp Python API（无 shell 拼接），文件名做了路径穿越防护与 HTML 转义
 - **自动更新**：每次构建拉取 yt-dlp nightly，配合定时重建始终跟随最新开发版
+- **日志可落盘**：运行日志默认写到 `/config/webui.log` 并按 10MB × 5 份轮转，`LOG_FILE` / `LOG_LEVEL` / `LOG_CONSOLE` 可调
 
 ## 快速开始
 
@@ -88,6 +89,7 @@ docker compose up -d
 ### 从源码构建镜像
 
 ```bash
+git clone https://github.com/dremous/yt-dlp-webui.git
 git clone https://github.com/dremous/yt-dlp-webui.git
 cd yt-dlp-webui
 docker build -t yt-dlp-webui .
@@ -227,6 +229,7 @@ docker exec yt-dlp-webui tail -n 100 /config/webui.log    # 或进容器看
 - 完全不想落盘：`LOG_FILE=none`
 - 只写文件、不要 `docker logs`：`LOG_CONSOLE=0`
 - 想看更细：`LOG_LEVEL=DEBUG`
+- 日志里每 30 秒一条 `GET /api/formats` 是 Docker 的 HEALTHCHECK 探活，已默认静默（失败时仍会打印）
 
 > 也可以交给 Docker 自己轮转：`--log-opt max-size=10m --log-opt max-file=5`。
 > 两者不冲突——文件那份方便拷走，`docker logs` 那份方便 `docker logs -f`。
@@ -260,7 +263,7 @@ python -m unittest discover -s tests -v
 | `PROXY_FILE` | `/config/proxy.txt` | 代理地址文件路径（一行 URL，由界面写入） |
 | `HTTP_CHUNK_SIZE` | `512M` | 单块大小，支持 `512M` / `1024K` / 字节数；`0` = 不分块 |
 | `TASKS_DB` | `<COOKIE_FILE 所在目录>/tasks.db` | 任务记录库（SQLite）路径，默认与 Cookie 同卷 |
-| `ACCESS_LOG_QUIET` | `1` | 置 `0` 恢复每条请求的 access log；默认静音成功的 `/api/tasks`、`/api/files` 轮询 |
+| `ACCESS_LOG_QUIET` | `1` | 置 `0` 恢复每条请求的 access log；默认静默成功的 `/api/tasks`、`/api/files` 轮询与 `/api/formats` 健康检查 |
 | `LOG_FILE` | `/config/webui.log` | 运行日志文件路径；置 `none` 则只走 `docker logs` |
 | `LOG_LEVEL` | `INFO` | 日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` |
 | `LOG_MAX_MB` | `10` | 单个日志文件上限（MB），超出后轮转；`0` = 不轮转 |
@@ -326,6 +329,7 @@ python -m unittest discover -s tests -v
 │   ├── tasklog.py                # 日志收集、凭证脱敏与失败摘要
 │   ├── store.py                  # 任务记录持久化（SQLite）
 │   ├── logconfig.py              # 运行日志落盘与轮转（LOG_FILE 等）
+│   ├── accesslog.py              # access log 降噪（轮询与健康检查）
 │   ├── serve.py                  # 容器入口：配好日志再启动 uvicorn
 │   └── static/                   # 前端构建产物（vite 自动输出，勿手改）
 └── tests/
