@@ -18,6 +18,7 @@ import time
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # 必须在 import app.downloader 之前顶替 yt_dlp（downloader 顶层会 import 它）
 if "yt_dlp" not in sys.modules:
@@ -159,6 +160,12 @@ class TaskOutputTest(RemovalTestBase):
         task_dir = self._seed("e2", "failed", ["video.mp4.part-Frag1"])
 
         self.assertIsNone(self.manager._task_output(task_dir))
+
+    def test_disappearing_file_does_not_raise(self):
+        """扫描时文件被并发删除，不能把已经下完的任务判成 failed。"""
+        task_dir = self._seed("e3", "finished", ["video.mp4"])
+        with mock.patch.object(Path, "stat", side_effect=OSError("gone")):
+            self.assertIsNone(self.manager._task_output(task_dir))
 
 
 class ReportFailureTest(RemovalTestBase):
