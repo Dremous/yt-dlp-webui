@@ -215,7 +215,7 @@ class DownloadTask:
         self.id = task_id
         self.url = url
         self.format = fmt
-        self.status = "queued"          # queued / downloading / finished / failed
+        self.status = "queued"          # queued / downloading / finished / failed / cancelled
         self.progress: float = 0.0      # 0 ~ 100
         self.speed: Optional[str] = None
         self.eta: Optional[str] = None
@@ -404,6 +404,24 @@ class DownloadManager:
         with self._lock:
             return sum(1 for t in self.tasks.values() if t.status in ENDED_STATES)
 
+    def cancel(self, task_id: str) -> DownloadTask:
+        """在锁内把任务迁移到 cancelled，避免和下载线程的终态写入互相覆盖。
+
+        KeyError：任务不存在；ValueError：任务已经结束，不能再取消。
+        """
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if task is None:
+                raise KeyError(task_id)
+            if task.status in ENDED_STATES:
+                raise ValueError("任务已结束，无法取消")
+            task.status = "cancelled"
+            task.stage = None
+            task.speed = None
+            task.eta = None
+        self.persist(task)
+        return task
+
     # ------------------------------------------------------------------
     # 任务持久化
     # ------------------------------------------------------------------
@@ -483,15 +501,21 @@ class DownloadManager:
                 raise KeyError(task_id)
             if task.status not in ENDED_STATES:
                 raise ValueError("任务尚未结束，请先取消")
-            del self.tasks[task_id]
+
+        # 先删库、再删内存：删库失败时任务仍留在列表里，不会出现「界面已删、
+        # 重启后又复活」的状态；TaskStore.delete 失败会返回 False。
+        if self._store is not None and not self._store.delete(task_id):
+            raise ValueError("任务库当前不可用，任务未删除，请稍后重试")
+
+        with self._lock:
+            if self.tasks.get(task_id) is task:
+                del self.tasks[task_id]
 
         # 目录清理放在锁外：rmtree 可能较慢，不该阻塞其他任务的状态读取。
         # 这里只是「尽力删除」：取消后后台线程要等下一次 progress hook 才退出，
         # 两边可能同时动这个目录。rmtree 都带 ignore_errors 所以不会抛。
         # 与失败日志落盘的竞态由 _report_failure 兜底：它在落盘前后各查一次
         # 任务是否还在，必要时把刚写回的目录再删掉。
-        if self._store is not None:
-            self._store.delete(task_id)
         discard = task.status in ("failed", "cancelled")
         if discard:
             shutil.rmtree(self.download_dir / task_id, ignore_errors=True)
@@ -505,16 +529,23 @@ class DownloadManager:
                 for tid, t in self.tasks.items()
                 if t.status in ENDED_STATES
             ]
-            for tid, _ in ended:
-                del self.tasks[tid]
 
-        if self._store is not None:
-            for tid, _ in ended:
-                self._store.delete(tid)
-        for tid, status in ended:
+        if self._store is None:
+            removed = ended
+        else:
+            removed = []
+            for tid, status in ended:
+                if not self._store.delete(tid):
+                    break  # 库不可用：已经删掉的部分保留，其余任务留在列表里
+                removed.append((tid, status))
+
+        with self._lock:
+            for tid, _ in removed:
+                self.tasks.pop(tid, None)
+        for tid, status in removed:
             if status in ("failed", "cancelled"):
                 shutil.rmtree(self.download_dir / tid, ignore_errors=True)
-        return len(ended)
+        return len(removed)
 
     # ------------------------------------------------------------------
     # 内部执行
@@ -523,97 +554,156 @@ class DownloadManager:
         # 用信号量限制最大并发；排队任务在此等待空闲并发位
         self._slots.acquire()
         try:
-            # 若排队期间被取消/清理，acquire 到后直接返回，避免孤儿下载
-            if task.status == "cancelled":
-                return
+            # 排队期间被取消/清理：acquire 到后直接返回，避免孤儿下载
+            with self._lock:
+                if self.tasks.get(task.id) is not task or task.status != "queued":
+                    return
             self._download(task)
         finally:
             self._slots.release()
 
-    def _download(self, task: DownloadTask) -> None:
-        # 每个任务写入自己的子目录，产物互不干扰
-        task_dir = self.download_dir / task.id
-        task_dir.mkdir(parents=True, exist_ok=True)
-        # 重新提交同一链接时，把上次失败留下的 .part 接管过来，避免从头再下一遍
-        adopted = self._adopt_partial(task, task_dir)
-
-        task.status = "downloading"
+    def _begin_download(self, task: DownloadTask) -> bool:
+        """在锁内把任务从 queued 迁移到 downloading；已取消/已删除则返回 False。"""
+        with self._lock:
+            if self.tasks.get(task.id) is not task or task.status != "queued":
+                return False
+            task.status = "downloading"
+            task.stage = None
+            task.speed = None
+            task.eta = None
         self.persist(task)
-        # 收集 yt-dlp 的详细日志：失败时脱敏后落盘，并在容器日志里打印末段。
-        # 日志只在内存缓冲（最多 2000 行），下载成功即随对象丢弃，不占磁盘。
-        task_logger = TaskLogger()
-        if adopted:
-            task_logger.info(f"[webui] 接管上次未完成的分片：{adopted}，从断点续传")
-        opts = {
-            "outtmpl": str(task_dir / "%(title).100B [%(id)s].%(ext)s"),
-            "noplaylist": True,          # 只下载单个视频，不展开播放列表
-            "noprogress": True,
-            # 网络容错：Python API 里 retries 缺省为 0（CLI 的默认 10 是命令行层给的），
-            # 等于「断一次就整体放弃」。http 下载器重试时会从 .part 的字节数发 Range 续传，
-            # 所以大文件经代理下载被中途掐断时，有重试才不会白下一遍。
-            "retries": 20,               # 单文件（含续传）重试次数
-            "fragment_retries": 20,      # HLS/DASH 分片重试次数
-            "socket_timeout": 30,        # 单次 socket 读超时（秒），默认 20
-            # 重试间隔：又是「CLI 有、API 没有」的默认值——RetryManager 只在
-            # retry_sleep_functions 里拿到可调用对象时才 sleep，缺省是 None，
-            # 于是 20 次重试会在几百毫秒内连着重连一遍。对服务端来说这是刷流量，
-            # 很容易从「连接被掐」升级成 403；在 Clash 的连接面板里就是
-            # 「连上—断开—立刻再连」刷屏。这里给指数退避（1,2,4,…,30 秒封顶）。
-            "retry_sleep_functions": {
-                "http": lambda n: min(2 ** n, 30),
-                "fragment": lambda n: min(2 ** n, 30),
-            },
-            # 大文件分块下载：每块结束主动换一条连接，单次断流最多重下这一块。
-            # 512M 对 20GB 约 38 次请求，既不会把连接拆得过碎，也不会一次丢掉几十 GB。
-            "http_chunk_size": HTTP_CHUNK_SIZE,
-            # verbose + 自定义 logger：把 debug 级输出交给 TaskLogger。
-            # 这里刻意不设 quiet / no_warnings —— 它们会把错误原因静音，
-            # 像偶发 403 这类问题就完全无从排查。
-            "verbose": True,
-            "logger": task_logger,
-            "progress_hooks": [lambda d: self._hook(d, task)],
-            # 后期阶段（转码/合并）也会回调，保证取消在 postprocessing 也能生效
-            "postprocessor_hooks": [lambda d: self._hook(d, task)],
-            **FORMATS[task.format]["options"],
-        }
+        return True
 
-        # 若已导入 Cookie，则附加 cookiefile（用于登录站点/绕过限制）
-        if self.cookie_ready():
-            opts["cookiefile"] = str(self.cookie_file)
-
-        # 若已配置代理，则让 yt-dlp 的所有出站请求走代理（国内访问 YouTube 必需）
-        proxy = self.proxy
-        if proxy:
-            opts["proxy"] = proxy
-
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(task.url, download=True)
-            task.title = (info or {}).get("title")
-            task.filename = self._task_output(task_dir)
+    def _finish(self, task: DownloadTask, title: Optional[str],
+                filename: Optional[str]) -> bool:
+        """在锁内检查取消后再标记 finished，避免完成状态覆盖取消。"""
+        with self._lock:
+            if self.tasks.get(task.id) is not task or task.status == "cancelled":
+                return False
+            task.title = title
+            task.filename = filename
             task.status = "finished"
             task.progress = 100.0
             task.stage = None
             task.speed = None
             task.eta = None
-            self.persist(task)
-        except DownloadCancelled:
-            # 用户主动取消：清空进度，标记已取消，并清理任务目录（含 .part 残留）
-            task.status = "cancelled"
-            task.stage = None
-            task.speed = None
-            task.eta = None
-            task.progress = 0.0
-            self.persist(task)
-            shutil.rmtree(task_dir, ignore_errors=True)
-        except Exception as exc:  # noqa: BLE001 - 需要把任意下载异常反馈给前端
+        self.persist(task)
+        return True
+
+    def _fail(self, task: DownloadTask, error: str) -> bool:
+        """在锁内检查取消后再标记失败；任务已取消时返回 False。"""
+        with self._lock:
+            if self.tasks.get(task.id) is not task or task.status == "cancelled":
+                return False
             task.status = "failed"
             task.stage = None
             task.speed = None
             task.eta = None
             task.progress = 0.0
-            task.error = self._report_failure(task, task_dir, task_logger, exc)
-            self.persist(task)
+            task.error = error
+        self.persist(task)
+        return True
+
+    def _cleanup_cancelled(self, task: DownloadTask, task_dir: Path) -> None:
+        """把已取消任务落盘并清理目录；任务已被删除时不要重新建记录。"""
+        with self._lock:
+            if self.tasks.get(task.id) is not task:
+                return
+            task.status = "cancelled"
+            task.stage = None
+            task.speed = None
+            task.eta = None
+            task.progress = 0.0
+        self.persist(task)
+        shutil.rmtree(task_dir, ignore_errors=True)
+
+    def _is_cancelled(self, task: DownloadTask) -> bool:
+        with self._lock:
+            return task.status == "cancelled"
+
+    def _download(self, task: DownloadTask) -> None:
+        task_dir = self.download_dir / task.id
+        # 先占住 queued -> downloading；如果排队期间已经取消，连目录都不建
+        try:
+            started = self._begin_download(task)
+        except Exception as exc:  # noqa: BLE001 - 持久化异常不能把任务线程直接打死
+            self._fail(task, f"任务初始化失败：{exc}")
+            return
+        if not started:
+            return
+        task_logger = TaskLogger()
+        try:
+            # 每个任务写入自己的子目录，产物互不干扰
+            task_dir.mkdir(parents=True, exist_ok=True)
+            if self._is_cancelled(task):
+                self._cleanup_cancelled(task, task_dir)
+                return
+            # 重新提交同一链接时，把上次失败留下的临时文件接管过来，避免从头再下一遍
+            adopted = self._adopt_partial(task, task_dir)
+            if self._is_cancelled(task):
+                self._cleanup_cancelled(task, task_dir)
+                return
+            if adopted:
+                task_logger.info(f"[webui] 接管上次未完成的分片：{adopted}，从断点续传")
+            opts = {
+                "outtmpl": str(task_dir / "%(title).100B [%(id)s].%(ext)s"),
+                "noplaylist": True,          # 只下载单个视频，不展开播放列表
+                "noprogress": True,
+                # 网络容错：Python API 里 retries 缺省为 0（CLI 的默认 10 是命令行层给的），
+                # 等于「断一次就整体放弃」。http 下载器重试时会从 .part 的字节数发 Range 续传，
+                # 所以大文件经代理下载被中途掐断时，有重试才不会白下一遍。
+                "retries": 20,               # 单文件（含续传）重试次数
+                "fragment_retries": 20,      # HLS/DASH 分片重试次数
+                "socket_timeout": 30,        # 单次 socket 读超时（秒），默认 20
+                # 重试间隔：又是「CLI 有、API 没有」的默认值——RetryManager 只在
+                # retry_sleep_functions 里拿到可调用对象时才 sleep，缺省是 None，
+                # 于是 20 次重试会在几百毫秒内连着重连一遍。对服务端来说这是刷流量，
+                # 很容易从「连接被掐」升级成 403；在 Clash 的连接面板里就是
+                # 「连上—断开—立刻再连」刷屏。这里给指数退避（1,2,4,…,30 秒封顶）。
+                "retry_sleep_functions": {
+                    "http": lambda n: min(2 ** n, 30),
+                    "fragment": lambda n: min(2 ** n, 30),
+                },
+                # 大文件分块下载：每块结束主动换一条连接，单次断流最多重下这一块。
+                # 512M 对 20GB 约 38 次请求，既不会把连接拆得过碎，也不会一次丢掉几十 GB。
+                "http_chunk_size": HTTP_CHUNK_SIZE,
+                # verbose + 自定义 logger：把 debug 级输出交给 TaskLogger。
+                # 这里刻意不设 quiet / no_warnings —— 它们会把错误原因静音，
+                # 像偶发 403 这类问题就完全无从排查。
+                "verbose": True,
+                "logger": task_logger,
+                "progress_hooks": [lambda d: self._hook(d, task)],
+                # 后期阶段（转码/合并）也会回调，保证取消在 postprocessing 也能生效
+                "postprocessor_hooks": [lambda d: self._hook(d, task)],
+                **FORMATS[task.format]["options"],
+            }
+
+            # 若已导入 Cookie，则附加 cookiefile（用于登录站点/绕过限制）
+            if self.cookie_ready():
+                opts["cookiefile"] = str(self.cookie_file)
+
+            # 若已配置代理，则让 yt-dlp 的所有出站请求走代理（国内访问 YouTube 必需）
+            proxy = self.proxy
+            if proxy:
+                opts["proxy"] = proxy
+
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(task.url, download=True)
+            title = (info or {}).get("title")
+            filename = self._task_output(task_dir)
+            if not self._finish(task, title, filename):
+                self._cleanup_cancelled(task, task_dir)
+        except DownloadCancelled:
+            # 用户主动取消：清空进度，标记已取消，并清理任务目录（含 .part 残留）
+            self._cleanup_cancelled(task, task_dir)
+        except Exception as exc:  # noqa: BLE001 - 需要把任意下载异常反馈给前端
+            # 取消与异常可能同时到达：取消优先，不能把已取消任务改回 failed
+            if self._is_cancelled(task):
+                self._cleanup_cancelled(task, task_dir)
+                return
+            error = self._report_failure(task, task_dir, task_logger, exc)
+            if not self._fail(task, error):
+                self._cleanup_cancelled(task, task_dir)
             # 失败：仅清理空目录（保留可能的中间文件与日志供排查/重试）
             try:
                 if not any(task_dir.iterdir()):
@@ -622,7 +712,7 @@ class DownloadManager:
                 pass
 
     def _adopt_partial(self, task: DownloadTask, task_dir: Path) -> Optional[str]:
-        """把同一链接的历史任务留下的 .part 搬进本次任务目录，实现跨任务续传。
+        """把同一链接的历史任务留下的临时文件搬进本次任务目录，实现跨任务续传。
 
         为什么需要它：任务目录按 task_id 隔离（删除策略与并发隔离都依赖这一点），
         于是「失败后重新提交」天然落在新目录里——上次下了 90% 的 .part 留在旧目录，
@@ -651,7 +741,16 @@ class DownloadManager:
             donor_dir = self.download_dir / donor_id
             if not donor_dir.is_dir():
                 continue
-            for part in donor_dir.glob("*.part"):
+            for part in donor_dir.iterdir():
+                # HLS/DASH 的 `.part-FragN` 和 yt-dlp 的 `.ytdl` 也是续传所需，
+                # 不能只 glob("*.part")；成品文件与日志/图片不在这里搬。
+                if not part.is_file():
+                    continue
+                if not (
+                    part.name.endswith((".part", ".ytdl"))
+                    or _PART_FRAG_RE.search(part.name)
+                ):
+                    continue
                 try:
                     size = part.stat().st_size
                 except OSError:
