@@ -19,12 +19,13 @@
 - **三种输出格式**：MP4 视频、最佳画质（原始格式）、MP3 音频（192kbps）
 - **实时进度**：百分比、速度、剩余时间，每 1.5 秒刷新
 - **并发任务**：最多 5 个同时下载，互不阻塞
+- **断点续传**：网络中断自动重试并续传（默认 20 次）；失败后重新提交同一链接，会把上次没下完的 `.part` 接管过来接着下，不必从 0 再来一遍
 - **登录 Cookie**：上传 `cookies.txt`，用于私享 / 会员 / 年龄受限内容
 - **文件与任务管理**：网页内下载、删除文件；已结束任务可单独删除或一键清理，任务记录最多保留 50 条
 
 ### 国内网络
 
-- **代理配置**：界面里填 HTTP / SOCKS5 地址，一键测试能否连通 YouTube
+- **代理配置**：界面里填 HTTP / SOCKS5 地址，一键测试能否连通 YouTube；`socks5://` 自动按 `socks5h://` 处理（域名交给代理端解析）
 - **JS 挑战可解**：镜像内置 `deno` 与 `yt-dlp-ejs`，YouTube 的 `n` 参数签名能正常解开
 - **失败可诊断**：失败时保留完整 yt-dlp 日志（代理密码自动脱敏），界面直接显示关键错误行
 
@@ -124,7 +125,9 @@ docker build -t yt-dlp-webui .
 
 - **不要填 `127.0.0.1`**——容器里的它指向容器自己，不是宿主机。填错时页面会直接给出提示。
 - 只填 `主机:端口` 也可以，缺省按 `http://` 处理。
-- 支持 `http` / `https` / `socks5` / `socks5h`；`socks5h` 由代理端解析域名，容器场景更省事。
+- 支持 `http` / `https` / `socks5` / `socks5h`。填 `socks5` 会自动按 `socks5h` 保存和使用——区别只在域名由谁解析：
+  `socks5` 在容器里本地解析，常拿到被污染或离代理出口很远的 `googlevideo` 记录，连上去容易被对端直接 RST；
+  `socks5h` 把主机名交给代理端，与代理出口位置一致，才是容器场景该用的。
 
 ### 排错对照
 
@@ -132,7 +135,7 @@ docker build -t yt-dlp-webui .
 |---|---|
 | 连接被拒绝 | 地址/端口写错，或代理没在监听该端口 |
 | 连接超时 | 代理未开启「允许局域网连接」，或防火墙拦了端口 |
-| SOCKS 代理不可用 | `socks5` 需要 PySocks，官方镜像已内置；自建环境请 `pip install PySocks` |
+| SOCKS 代理不可用 | `socks5` / `socks5h` 需要 PySocks，官方镜像已内置；自建环境请 `pip install PySocks` |
 | 连通正常但下载仍失败 | 目标站点本身需要登录凭证，见下一节的 Cookie |
 
 ## 登录 Cookie
@@ -278,7 +281,8 @@ python -m unittest discover -s tests -v
 │   └── static/                   # 前端构建产物（vite 自动输出，勿手改）
 └── tests/
     ├── test_tasklog.py           # 日志脱敏与摘要
-    └── test_task_lifecycle.py    # 任务删除与目录清理策略
+    ├── test_task_lifecycle.py    # 任务删除与目录清理策略
+    └── test_resume_and_proxy.py  # 断点续传接管与代理地址规范化
 ```
 
 ## 说明
