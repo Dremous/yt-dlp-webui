@@ -233,7 +233,9 @@ function TaskItem({ task, onChanged, onDelete }) {
     }
   }
 
-  const canRetry = task.status === "failed" || task.status === "cancelled";
+    const canRetry = task.status === "failed" || task.status === "cancelled";
+  // 排队任务也在等待并发位，必须能从界面取消；后端接口本来就支持 queued。
+  const canCancel = task.status === "queued" || task.status === "downloading";
   const { Icon } = meta;
 
   return (
@@ -305,7 +307,7 @@ function TaskItem({ task, onChanged, onDelete }) {
           </>
         )}
         <span className="flex-1 truncate text-slate-300">{title}</span>
-        {task.status === "downloading" && (
+        {canCancel && (
           <Button
             size="sm"
             disableRipple
@@ -315,7 +317,7 @@ function TaskItem({ task, onChanged, onDelete }) {
             className="transition-ui"
             startContent={<X size={14} weight="bold" aria-hidden="true" />}
           >
-            取消
+            {task.status === "queued" ? "取消排队" : "取消"}
           </Button>
         )}
         {canRetry && (
