@@ -13,6 +13,8 @@ services:
       - DOWNLOAD_DIR=/downloads
       - COOKIE_FILE=/config/cookies.txt
       - PROXY_FILE=/config/proxy.txt
+      # 运行日志落盘（轮转与级别可用 LOG_MAX_MB / LOG_BACKUPS / LOG_LEVEL 调整）
+      - LOG_FILE=/config/webui.log
     # 让容器内可以用 host.docker.internal 指向宿主机（Linux 原生 Docker 必需，
     # Docker Desktop 自带；国内代理装在宿主机时靠它访问）
     extra_hosts:

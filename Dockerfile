@@ -46,6 +46,9 @@ ENV PYTHONUNBUFFERED=1 \
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
 
+# 运行日志落盘位置（/config 是持久卷）；置 none 则只走 docker logs
+ENV LOG_FILE=/config/webui.log
+
 # ffmpeg：用于视频合并与音频转码（mp3 提取必需）
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
@@ -87,4 +90,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 # 卷：下载文件与配置（Cookie / 代理）持久化
 VOLUME /downloads /config
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# 入口脚本先按 LOG_* 环境变量配置日志，再启动 uvicorn
+CMD ["python", "-m", "app.serve"]
