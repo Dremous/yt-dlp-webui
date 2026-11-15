@@ -270,8 +270,9 @@ python -m unittest discover -s tests -v
 | `LOG_MAX_MB` | `10` | 单个日志文件上限（MB），超出后轮转；`0` = 不轮转 |
 | `LOG_BACKUPS` | `5` | 保留的历史日志文件个数 |
 | `LOG_CONSOLE` | `1` | 置 `0` 则只写文件，不再打印到 `docker logs` |
+| `PORT` | `8080` | 容器内监听端口；健康检查与 compose 端口映射会跟随该变量 |
 
-对外端口通过 `-p 8080:8080` 映射，容器内固定监听 8080。
+对外端口默认 8080，可用 `PORT` 覆盖；容器内监听、健康检查与 compose 映射会一起跟随。
 
 ## API
 
@@ -344,7 +345,8 @@ python -m unittest discover -s tests -v
     ├── test_progress.py          # 多流进度累计与后期处理阶段
     ├── test_task_store.py        # 任务持久化、坏库隔离与重启恢复
     ├── test_access_log.py        # 轮询日志过滤
-    ├── test_cookie_upload.py     # Cookie 上传大小限制
+    ├── test_cookie_upload.py     # Cookie 上传限制与 app.main 路由
+    ├── test_dockerfile.py        # 健康检查/ compose 端口跟随 PORT
     └── test_log_config.py        # 日志落盘与轮转
 ```
 
