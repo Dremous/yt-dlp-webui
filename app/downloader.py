@@ -8,6 +8,7 @@
 """
 
 import os
+import re
 import shutil
 import sys
 import threading
@@ -142,6 +143,16 @@ TMP_SUFFIXES = (
     ".part", ".ytdl", ".tmp", ".temp", ".webp",
     ".jpg", ".png", ".description", ".info.json", ".log",
 )
+
+# HLS/DASH 分片下载时，yt-dlp 会把分片临时文件写成 `.part-FragN`；
+# 它不以 `.part` 结尾，只靠 endswith(TMP_SUFFIXES) 会漏掉。
+_PART_FRAG_RE = re.compile(r"\.(?:part|ytdl)-Frag\d+$")
+
+
+def is_temp_name(name: str) -> bool:
+    """判断文件名是否是下载中的临时/中间产物（含 `.part-FragN`）。"""
+    return name.endswith(TMP_SUFFIXES) or bool(_PART_FRAG_RE.search(name))
+
 
 # 失败时保留在任务子目录里的 yt-dlp 详细日志文件名
 LOG_NAME = "yt-dlp.log"
@@ -397,8 +408,18 @@ class DownloadManager:
     # 任务持久化
     # ------------------------------------------------------------------
     def persist(self, task: DownloadTask) -> None:
-        """把任务当前状态写盘；没配置 store 时什么也不做。"""
-        if self._store is not None:
+        """把任务当前状态写盘；任务已被删除或没配置 store 时什么也不做。
+
+        删除与落盘必须串行：remove_task 先删内存记录、再删 SQLite 行，如果
+        后台线程随后才带着终态调用 persist，旧实现会重新 INSERT，任务会在
+        重启后“复活”。这里在同一把锁内确认任务还在、且是同一个对象，避免
+        晚到的落盘把已删记录插回去。
+        """
+        if self._store is None:
+            return
+        with self._lock:
+            if self.tasks.get(task.id) is not task:
+                return
             self._store.save(task)
 
     def _restore_tasks(self) -> None:
@@ -765,12 +786,11 @@ class DownloadManager:
     # ------------------------------------------------------------------
     # 产物定位 & 任务清理
     # ------------------------------------------------------------------
-    # 下载中可能残留的临时/中间文件后缀，不视作最终产物
     def _task_output(self, task_dir: Path) -> Optional[str]:
         """返回任务子目录中最新的成品文件（排除临时/中间文件），相对下载目录的路径。"""
         files = [
             p for p in task_dir.iterdir()
-            if p.is_file() and not p.name.endswith(TMP_SUFFIXES)
+            if p.is_file() and not is_temp_name(p.name)
         ]
         if not files:
             return None
