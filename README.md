@@ -229,6 +229,7 @@ docker exec yt-dlp-webui tail -n 100 /config/webui.log    # 或进容器看
 - 只写文件、不要 `docker logs`：`LOG_CONSOLE=0`
 - 想看更细：`LOG_LEVEL=DEBUG`
 - 日志里每 30 秒一条 `GET /api/formats` 是 Docker 的 HEALTHCHECK 探活，已默认静音（失败时仍会打印）
+- 容器入口与本地 `uvicorn app.main:app` 都读同一组 `LOG_*` 变量（文件在本地同样生效）
 
 > 也可以交给 Docker 自己轮转：`--log-opt max-size=10m --log-opt max-file=5`。
 > 两者不冲突——文件那份方便拷走，`docker logs` 那份方便 `docker logs -f`。
@@ -296,6 +297,7 @@ python -m unittest discover -s tests -v
 
 > 清理接口用 `POST` 而不是 `DELETE /api/tasks`，是为了避免被误读成「删除全部任务」，包括正在下载的那些。
 > 任务记录最多保留 50 条，超出时自动裁剪最旧的记录，但**不会删除磁盘文件**——回收残留要靠上面两个接口。
+> `tasks.db` 损坏（断电 / 磁盘写满）时会自动改名为 `tasks.db.corrupt-<时间戳>` 并重建空表，服务照常启动。
 
 ## 项目结构
 
@@ -326,7 +328,7 @@ python -m unittest discover -s tests -v
 │   ├── main.py                   # FastAPI 入口 + 全部路由
 │   ├── downloader.py             # 任务调度、并发、进度、代理、Cookie
 │   ├── tasklog.py                # 日志收集、凭证脱敏与失败摘要
-│   ├── store.py                  # 任务记录持久化（SQLite）
+│   ├── store.py                  # 任务记录持久化（SQLite，损坏自动隔离）
 │   ├── logconfig.py              # 运行日志落盘与轮转（LOG_FILE 等）
 │   ├── accesslog.py              # access log 降噪（轮询与健康检查）
 │   ├── serve.py                  # 容器入口：配好日志再启动 uvicorn
@@ -338,7 +340,7 @@ python -m unittest discover -s tests -v
     ├── test_formats.py           # 输出格式预设的完整性
     ├── test_chunk_size.py        # HTTP_CHUNK_SIZE 单位解析
     ├── test_progress.py          # 多流进度累计与后期处理阶段
-    ├── test_task_store.py        # 任务持久化与重启恢复
+    ├── test_task_store.py        # 任务持久化、坏库隔离与重启恢复
     ├── test_access_log.py        # 轮询日志过滤
     └── test_log_config.py        # 日志落盘与轮转
 ```
