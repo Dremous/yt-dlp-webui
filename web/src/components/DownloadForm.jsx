@@ -16,7 +16,7 @@ import { api } from "../api.js";
 
 export default function DownloadForm({ formats, onSubmit }) {
   const [url, setUrl] = useState("");
-  const [format, setFormat] = useState("mp4");
+  const [format, setFormat] = useState("best");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
