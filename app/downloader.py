@@ -204,10 +204,15 @@ class DownloadTask:
         self.progress: float = 0.0      # 0 ~ 100
         self.speed: Optional[str] = None
         self.eta: Optional[str] = None
+        self.stage: Optional[str] = None  # 下载结束后的后期处理阶段（合并 / 转码）
         self.title: Optional[str] = None
         self.filename: Optional[str] = None  # 相对下载目录的路径（含任务子目录前缀）
         self.error: Optional[str] = None
         self.created: float = time.time()
+        # 多流（视频轨 + 音频轨）是分两次下载的：已下完的流字节数累计在这里，
+        # 作为跨流进度的分子；总大小只从 requested_formats 求一次，免得每帧重算
+        self._stream_done: float = 0.0
+        self._grand_total: Optional[float] = None
 
     def to_dict(self) -> dict:
         return {
@@ -216,6 +221,7 @@ class DownloadTask:
             "format": self.format,
             "status": self.status,
             "progress": round(self.progress, 1),
+            "stage": self.stage,
             "speed": self.speed,
             "eta": self.eta,
             "title": self.title,
@@ -498,17 +504,20 @@ class DownloadManager:
             task.filename = self._task_output(task_dir)
             task.status = "finished"
             task.progress = 100.0
+            task.stage = None
             task.speed = None
             task.eta = None
         except DownloadCancelled:
             # 用户主动取消：清空进度，标记已取消，并清理任务目录（含 .part 残留）
             task.status = "cancelled"
+            task.stage = None
             task.speed = None
             task.eta = None
             task.progress = 0.0
             shutil.rmtree(task_dir, ignore_errors=True)
         except Exception as exc:  # noqa: BLE001 - 需要把任意下载异常反馈给前端
             task.status = "failed"
+            task.stage = None
             task.speed = None
             task.eta = None
             task.progress = 0.0
@@ -629,13 +638,49 @@ class DownloadManager:
         if task.status == "cancelled":
             raise DownloadCancelled()
         # progress / postprocessor 回调结构不同，用 .get 防御缺键
-        if data.get("status") == "downloading":
-            total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
-            downloaded = data.get("downloaded_bytes", 0)
+        status = data.get("status")
+        if status == "downloading":
+            done, total = self._progress_totals(data, task)
             if total:
-                task.progress = min(downloaded / total * 100.0, 100.0)
+                task.progress = min(done / total * 100.0, 100.0)
             task.speed = data.get("_speed_str") or data.get("speed_str")
             task.eta = data.get("_eta_str") or data.get("eta_str")
+        elif status == "finished":
+            # 有两类 finished：某一路流下载完成（带 downloaded_bytes），
+            # 以及后期处理结束（不带）。前者要把字节数记账，后者只是清阶段提示
+            if data.get("downloaded_bytes") is not None:
+                task._stream_done += float(data["downloaded_bytes"] or 0)
+                task.stage = None
+            else:
+                task.stage = None
+            task.speed = None
+            task.eta = None
+        elif status == "started":
+            # postprocessor 钩子没有名字（yt-dlp 只传 status），只能给个通用阶段；
+            # 它的意义是让前端知道「下载已结束、正在合并/转码」，而不是卡在 100%
+            task.stage = "合并 / 转码中"
+            task.speed = None
+            task.eta = None
+
+    @staticmethod
+    def _progress_totals(data: dict, task: DownloadTask) -> tuple:
+        """返回 (已下载字节, 总字节)。
+
+        `best` 这类档位会选中「视频轨 + 音频轨」，yt-dlp 在 process_info 里对每个流
+        各调一次下载器，因此每次回调看到的 total_bytes 都只是当前流的大小。
+        直接用它算百分比，进度会先冲到 100%、换流后又掉回 0 走第二遍。
+        这里用 requested_formats 的总和作分母，把已完成的流累加进分子。
+        """
+        if task._grand_total is None:
+            fmts = (data.get("info_dict") or {}).get("requested_formats") or []
+            sizes = [f.get("filesize") or f.get("filesize_approx") or 0 for f in fmts]
+            # 只有多流且每个流都报了大小时才聚合，否则退回逐流百分比
+            task._grand_total = sum(sizes) if len(fmts) > 1 and all(sizes) else 0
+        downloaded = float(data.get("downloaded_bytes") or 0)
+        if task._grand_total:
+            return task._stream_done + downloaded, task._grand_total
+        total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
+        return downloaded, total
 
     # ------------------------------------------------------------------
     # 产物定位 & 任务清理
