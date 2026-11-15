@@ -130,6 +130,15 @@ class TaskStore:
             finally:
                 conn.close()
 
+    def _disable(self, exc: Exception) -> None:
+        """初始化成功之后又遇到磁盘写满/锁库：本次运行停止持久化，但进程继续。"""
+        if self._disabled:
+            return
+        self._disabled = True
+        logging.getLogger(__name__).warning(
+            "任务库运行时不可用，本次运行停止持久化任务：%s", exc
+        )
+
     def save(self, task) -> None:
         """写入或更新一条任务记录（按 id UPSERT）。"""
         if self._disabled:
@@ -141,35 +150,49 @@ class TaskStore:
             f"INSERT INTO tasks ({', '.join(_COLUMNS)}) VALUES ({placeholders}) "
             f"ON CONFLICT(id) DO UPDATE SET {updates}"
         )
-        with self._lock:
-            conn = self._connect()
-            try:
-                conn.execute(sql, values)
-                conn.commit()
-            finally:
-                conn.close()
+        try:
+            with self._lock:
+                conn = self._connect()
+                try:
+                    conn.execute(sql, values)
+                    conn.commit()
+                finally:
+                    conn.close()
+        except (sqlite3.DatabaseError, OSError) as exc:
+            # 旧实现会让异常穿透后台下载线程，任务永远停在 downloading。
+            self._disable(exc)
 
-    def delete(self, task_id: str) -> None:
+    def delete(self, task_id: str) -> bool:
         if self._disabled:
-            return
-        with self._lock:
-            conn = self._connect()
-            try:
-                conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-                conn.commit()
-            finally:
-                conn.close()
+            return False
+        try:
+            with self._lock:
+                conn = self._connect()
+                try:
+                    conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+                    conn.commit()
+                finally:
+                    conn.close()
+        except (sqlite3.DatabaseError, OSError) as exc:
+            self._disable(exc)
+            return False
+        return True
 
     def load(self) -> List[Dict]:
         """按创建时间升序返回全部记录（恢复时取尾部的最新若干条）。"""
         if self._disabled:
             return []
-        with self._lock:
-            conn = self._connect()
-            try:
-                rows = conn.execute(
-                    f"SELECT {', '.join(_COLUMNS)} FROM tasks ORDER BY created"
-                ).fetchall()
-            finally:
-                conn.close()
+        try:
+            with self._lock:
+                conn = self._connect()
+                try:
+                    rows = conn.execute(
+                        f"SELECT {', '.join(_COLUMNS)} FROM tasks ORDER BY created"
+                    ).fetchall()
+                finally:
+                    conn.close()
+        except (sqlite3.DatabaseError, OSError) as exc:
+            # 启动恢复阶段读库失败也不能让 import 崩掉；按空任务列表继续。
+            self._disable(exc)
+            return []
         return [_row_to_dict(row) for row in rows]
