@@ -5,10 +5,27 @@
 """
 
 import os
+import logging
 
 import uvicorn
 
 from .logconfig import setup_logging
+
+log = logging.getLogger(__name__)
+
+
+def _port() -> int:
+    """读取 PORT；非法值回退 8080，避免容器在 restart 策略下无限重启。"""
+    raw = os.environ.get("PORT", "8080")
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        log.warning("PORT=%r 不是合法端口，回退到 8080", raw)
+        return 8080
+    if not 1 <= port <= 65535:
+        log.warning("PORT=%r 超出 1-65535，回退到 8080", raw)
+        return 8080
+    return port
 
 
 def main() -> None:
@@ -19,7 +36,7 @@ def main() -> None:
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(os.environ.get("PORT", "8080")),
+        port=_port(),
         log_config=None,  # 用上面配好的 root handler，别让 uvicorn 覆盖
     )
 
