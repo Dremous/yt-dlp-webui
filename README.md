@@ -208,6 +208,29 @@ YouTube 的播放地址带 JS 挑战（`n` 参数签名），yt-dlp 需要外部
 > 无需额外密钥——workflow 使用内置的 `GITHUB_TOKEN` 自动完成 GHCR 登录。
 > 可选配置 `secrets.WEBHOOK_URL`（飞书 / 企业微信 / 钉钉机器人），构建失败时推送告警。
 
+### 运行日志落盘
+
+`docker logs` 只保留 stdout，容器一删就没了。镜像默认把同一份日志写到
+`/config/webui.log`（随 `./config` 卷持久化），并按 10MB × 5 份自动轮转：
+
+```bash
+tail -f config/webui.log                                  # 宿主机上直接看
+docker exec yt-dlp-webui tail -n 100 /config/webui.log    # 或进容器看
+```
+
+```
+2026-11-15 19:58:01 INFO     uvicorn.error: Application startup complete.
+2026-11-15 19:58:03 INFO     uvicorn.access: 192.168.0.2:1 - "POST /api/download HTTP/1.1" 200
+```
+
+- 想留久一点：`LOG_MAX_MB=50 LOG_BACKUPS=10`
+- 完全不想落盘：`LOG_FILE=none`
+- 只写文件、不要 `docker logs`：`LOG_CONSOLE=0`
+- 想看更细：`LOG_LEVEL=DEBUG`
+
+> 也可以交给 Docker 自己轮转：`--log-opt max-size=10m --log-opt max-file=5`。
+> 两者不冲突——文件那份方便拷走，`docker logs` 那份方便 `docker logs -f`。
+
 ### 本地开发
 
 ```bash
@@ -238,6 +261,11 @@ python -m unittest discover -s tests -v
 | `HTTP_CHUNK_SIZE` | `512M` | 单块大小，支持 `512M` / `1024K` / 字节数；`0` = 不分块 |
 | `TASKS_DB` | `<COOKIE_FILE 所在目录>/tasks.db` | 任务记录库（SQLite）路径，默认与 Cookie 同卷 |
 | `ACCESS_LOG_QUIET` | `1` | 置 `0` 恢复每条请求的 access log；默认静音成功的 `/api/tasks`、`/api/files` 轮询 |
+| `LOG_FILE` | `/config/webui.log` | 运行日志文件路径；置 `none` 则只走 `docker logs` |
+| `LOG_LEVEL` | `INFO` | 日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `LOG_MAX_MB` | `10` | 单个日志文件上限（MB），超出后轮转；`0` = 不轮转 |
+| `LOG_BACKUPS` | `5` | 保留的历史日志文件个数 |
+| `LOG_CONSOLE` | `1` | 置 `0` 则只写文件，不再打印到 `docker logs` |
 
 对外端口通过 `-p 8080:8080` 映射，容器内固定监听 8080。
 
@@ -297,6 +325,8 @@ python -m unittest discover -s tests -v
 │   ├── downloader.py             # 任务调度、并发、进度、代理、Cookie
 │   ├── tasklog.py                # 日志收集、凭证脱敏与失败摘要
 │   ├── store.py                  # 任务记录持久化（SQLite）
+│   ├── logconfig.py              # 运行日志落盘与轮转（LOG_FILE 等）
+│   ├── serve.py                  # 容器入口：配好日志再启动 uvicorn
 │   └── static/                   # 前端构建产物（vite 自动输出，勿手改）
 └── tests/
     ├── test_tasklog.py           # 日志脱敏与摘要
@@ -306,7 +336,8 @@ python -m unittest discover -s tests -v
     ├── test_chunk_size.py        # HTTP_CHUNK_SIZE 单位解析
     ├── test_progress.py          # 多流进度累计与后期处理阶段
     ├── test_task_store.py        # 任务持久化与重启恢复
-    └── test_access_log.py        # 轮询日志过滤
+    ├── test_access_log.py        # 轮询日志过滤
+    └── test_log_config.py        # 日志落盘与轮转
 ```
 
 ## 说明
