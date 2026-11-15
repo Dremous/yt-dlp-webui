@@ -270,7 +270,7 @@ class DownloadManager:
 
     def proxy_status(self) -> dict:
         """返回代理状态，供前端展示。"""
-        proxy = self._proxy
+        proxy = self.proxy
         if not proxy:
             return {"active": False, "url": None}
         return {"active": True, "url": proxy}
