@@ -24,7 +24,54 @@ from .tasklog import TaskLogger
 # ---------------------------------------------------------------------------
 # 输出格式预设
 # ---------------------------------------------------------------------------
+# 每个预设就是一段 yt-dlp opts，前端下拉框完全由 /api/formats 驱动——加一档只改这里，
+# 前端不用动。
+#
+# 视频预设的通用写法：
+# - `bv` + `ba` 分别取最好的纯视频流与纯音频流再合并。YouTube 的高分辨率是音视频分离的，
+#   只写 bv 会得到无声视频；`/b` 兜住「只有合并流」的站点（哔哩哔哩、部分自建站）。
+# - 先试 mp4 + m4a 的组合，再退化到任意编码，最后退化到单一流：某档分辨率只有 AV1/VP9
+#   时，前一条匹配不到也不会整单失败。
+# - merge_output_format=mp4 保证成品是 .mp4，而不是 ffmpeg 默认挑的 .mkv/.webm。
+# 音频预设统一 bestaudio + FFmpegExtractAudio，码率由 preferredquality 决定；
+# m4a 那档不转码，直接把原始音频流抽出来。
+def _mp3_options(quality: str) -> dict:
+    """MP3 预设：只下音轨，再按指定码率转码。"""
+    return {
+        "format": "bestaudio/best",
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": quality,
+            }
+        ],
+    }
+
+
+def _video_options(max_height: Optional[int] = None,
+                   prefer_avc: bool = False) -> dict:
+    """MP4 视频预设：按分辨率上限选流，并尽量凑成 mp4 + m4a。"""
+    if prefer_avc:
+        # avc1 = H.264：老设备、剪辑软件、部分播放器只认它。YouTube 的 H.264 最高到 1080p
+        chain = (
+            "bv[vcodec^=avc1]+ba[ext=m4a]"
+            "/bv[ext=mp4]+ba[ext=m4a]"
+            "/b[ext=mp4]/b"
+        )
+    else:
+        cap = f"[height<={max_height}]" if max_height else ""
+        chain = (
+            f"bv{cap}[ext=mp4]+ba[ext=m4a]"
+            f"/bv{cap}+ba"
+            f"/b{cap}"
+        )
+    return {"format": chain, "merge_output_format": "mp4"}
+
+
 FORMATS: Dict[str, dict] = {
+    # ---- 视频（MP4 容器）----
+    # 默认档：不设上限的「最高 mp4 画质」，与历史行为一致
     "mp4": {
         "label": "MP4 视频（最高 mp4 画质）",
         "options": {
@@ -32,24 +79,28 @@ FORMATS: Dict[str, dict] = {
             "merge_output_format": "mp4",
         },
     },
+    "mp4_2160": {"label": "MP4 4K（2160p）", "options": _video_options(2160)},
+    "mp4_1440": {"label": "MP4 2K（1440p）", "options": _video_options(1440)},
+    "mp4_1080": {"label": "MP4 1080p", "options": _video_options(1080)},
+    "mp4_720": {"label": "MP4 720p", "options": _video_options(720)},
+    "mp4_480": {"label": "MP4 480p（省流量）", "options": _video_options(480)},
+    "mp4_avc": {
+        "label": "MP4 H.264（老设备 / 剪辑软件兼容）",
+        "options": _video_options(prefer_avc=True),
+    },
     "best": {
         "label": "最佳画质（保留原始格式）",
         "options": {
             "format": "bestvideo+bestaudio/best",
         },
     },
-    "mp3": {
-        "label": "MP3 音频（192kbps）",
-        "options": {
-            "format": "bestaudio/best",
-            "postprocessors": [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }
-            ],
-        },
+    # ---- 音频 ----
+    "mp3": {"label": "MP3 音频（192kbps）", "options": _mp3_options("192")},
+    "mp3_320": {"label": "MP3 音频（320kbps 高品质）", "options": _mp3_options("320")},
+    "mp3_128": {"label": "MP3 音频（128kbps 省空间）", "options": _mp3_options("128")},
+    "m4a": {
+        "label": "原始音频（不转码，m4a / opus）",
+        "options": {"format": "bestaudio[ext=m4a]/bestaudio/best"},
     },
 }
 
