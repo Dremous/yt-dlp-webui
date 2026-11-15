@@ -35,7 +35,6 @@ from pydantic import BaseModel, Field
 
 from .downloader import (
     DEFAULT_FORMAT,
-    ENDED_STATES,
     FORMATS,
     DownloadManager,
     is_temp_name,
@@ -130,13 +129,12 @@ def list_tasks(limit: int = Query(30, ge=1, le=50)):
 
 @app.post("/api/tasks/{task_id}/cancel")
 def cancel_task(task_id: str):
-    task = manager.get(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    if task.status in ENDED_STATES:
-        raise HTTPException(status_code=400, detail="任务已结束，无法取消")
-    # queued：线程 acquire 后自查返回；downloading：进度 hook 检测后终止
-    task.status = "cancelled"
+    try:
+        manager.cancel(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "id": task_id}
 
 
