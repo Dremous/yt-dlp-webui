@@ -19,6 +19,7 @@ from typing import Dict, List, Optional
 
 import yt_dlp
 
+from .store import TaskStore
 from .tasklog import TaskLogger
 
 # ---------------------------------------------------------------------------
@@ -150,6 +151,9 @@ LOG_TAIL_LINES = 30
 # 已结束的任务状态：只有这些状态允许从列表删除，进行中的必须先取消
 ENDED_STATES = ("finished", "failed", "cancelled")
 
+# 重启后给中断任务的说明：.part 还在，点重试即可续传
+RESTART_ERROR = "服务重启导致任务中断，点「重试」可继续（已下载的部分会尽量续传）"
+
 # 允许的代理协议：socks5h 表示由代理端解析域名，容器/远程代理场景更省事
 ALLOWED_PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
 
@@ -213,6 +217,8 @@ class DownloadTask:
         # 作为跨流进度的分子；总大小只从 requested_formats 求一次，免得每帧重算
         self._stream_done: float = 0.0
         self._grand_total: Optional[float] = None
+        # 上次落盘时的进度，用来做 1% 节流，避免每帧都写 SQLite
+        self._persisted_progress: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -238,10 +244,11 @@ class DownloadManager:
     若文件存在则自动附加到 yt-dlp 的 cookiefile 选项，用于登录/绕过限制。
     proxy_file：可选。指向保存代理地址的文本文件（一行 URL），
     若存在则让 yt-dlp 的出站请求走该代理，用于国内访问 YouTube 等被墙站点。
+    store：可选。任务记录的持久化后端（见 app/store.py）。传入时启动即恢复历史任务。
     """
 
     def __init__(self, download_dir: Path, cookie_file: Optional[str] = None,
-                 proxy_file: Optional[str] = None):
+                 proxy_file: Optional[str] = None, store: Optional[TaskStore] = None):
         self.download_dir = Path(download_dir)
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.cookie_file = Path(cookie_file) if cookie_file else None
@@ -250,7 +257,10 @@ class DownloadManager:
         self._lock = threading.Lock()
         self._slots = threading.BoundedSemaphore(MAX_CONCURRENT)
         self._proxy: Optional[str] = None  # 当前生效的代理地址（None = 直连）
+        self._store = store
         self._load_proxy()
+        if self._store is not None:
+            self._restore_tasks()
 
     # ------------------------------------------------------------------
     # Cookie 支持
@@ -352,6 +362,7 @@ class DownloadManager:
         with self._lock:
             self._trim_tasks()
             self.tasks[task.id] = task
+        self.persist(task)
         threading.Thread(target=self._run, args=(task,), daemon=True).start()
         return task
 
@@ -383,6 +394,52 @@ class DownloadManager:
             return sum(1 for t in self.tasks.values() if t.status in ENDED_STATES)
 
     # ------------------------------------------------------------------
+    # 任务持久化
+    # ------------------------------------------------------------------
+    def persist(self, task: DownloadTask) -> None:
+        """把任务当前状态写盘；没配置 store 时什么也不做。"""
+        if self._store is not None:
+            self._store.save(task)
+
+    def _restore_tasks(self) -> None:
+        """启动时恢复任务记录。
+
+        未完成（queued / downloading）的任务在进程重启后不可能继续跑，统一标成
+        failed 并写明原因；它们的 .part 留在原目录，用户点「重试」时
+        _adopt_partial 会把这个任务当捐赠者，把残片接管到新任务目录接着下。
+        """
+        rows = self._store.load()
+        if len(rows) > MAX_TASKS:
+            # 与内存上限保持一致：尾部留最新 MAX_TASKS 条，其余连同记录一起清掉
+            for row in rows[:-MAX_TASKS]:
+                self._store.delete(row["id"])
+            rows = rows[-MAX_TASKS:]
+
+        restored = []
+        for row in rows:
+            task = DownloadTask(row["id"], row["url"], row["format"])
+            task.status = row["status"]
+            task.progress = float(row["progress"] or 0.0)
+            task.stage = row["stage"]
+            task.title = row["title"]
+            task.filename = row["filename"]
+            task.error = row["error"]
+            task.created = float(row["created"] or time.time())
+            task._persisted_progress = task.progress
+            if task.status in ("queued", "downloading"):
+                task.status = "failed"
+                task.stage = None
+                task.speed = None
+                task.eta = None
+                task.error = RESTART_ERROR
+                self._store.save(task)
+            restored.append(task)
+
+        with self._lock:
+            for task in restored:
+                self.tasks[task.id] = task
+
+    # ------------------------------------------------------------------
     # 任务删除（只处理已结束的任务，避免与后台线程争抢同一目录）
     # ------------------------------------------------------------------
     def remove_task(self, task_id: str) -> dict:
@@ -407,6 +464,8 @@ class DownloadManager:
         # 两边可能同时动这个目录。rmtree 都带 ignore_errors 所以不会抛。
         # 与失败日志落盘的竞态由 _report_failure 兜底：它在落盘前后各查一次
         # 任务是否还在，必要时把刚写回的目录再删掉。
+        if self._store is not None:
+            self._store.delete(task_id)
         discard = task.status in ("failed", "cancelled")
         if discard:
             shutil.rmtree(self.download_dir / task_id, ignore_errors=True)
@@ -423,6 +482,9 @@ class DownloadManager:
             for tid, _ in ended:
                 del self.tasks[tid]
 
+        if self._store is not None:
+            for tid, _ in ended:
+                self._store.delete(tid)
         for tid, status in ended:
             if status in ("failed", "cancelled"):
                 shutil.rmtree(self.download_dir / tid, ignore_errors=True)
@@ -450,6 +512,7 @@ class DownloadManager:
         adopted = self._adopt_partial(task, task_dir)
 
         task.status = "downloading"
+        self.persist(task)
         # 收集 yt-dlp 的详细日志：失败时脱敏后落盘，并在容器日志里打印末段。
         # 日志只在内存缓冲（最多 2000 行），下载成功即随对象丢弃，不占磁盘。
         task_logger = TaskLogger()
@@ -507,6 +570,7 @@ class DownloadManager:
             task.stage = None
             task.speed = None
             task.eta = None
+            self.persist(task)
         except DownloadCancelled:
             # 用户主动取消：清空进度，标记已取消，并清理任务目录（含 .part 残留）
             task.status = "cancelled"
@@ -514,6 +578,7 @@ class DownloadManager:
             task.speed = None
             task.eta = None
             task.progress = 0.0
+            self.persist(task)
             shutil.rmtree(task_dir, ignore_errors=True)
         except Exception as exc:  # noqa: BLE001 - 需要把任意下载异常反馈给前端
             task.status = "failed"
@@ -522,6 +587,7 @@ class DownloadManager:
             task.eta = None
             task.progress = 0.0
             task.error = self._report_failure(task, task_dir, task_logger, exc)
+            self.persist(task)
             # 失败：仅清理空目录（保留可能的中间文件与日志供排查/重试）
             try:
                 if not any(task_dir.iterdir()):
@@ -645,6 +711,10 @@ class DownloadManager:
                 task.progress = min(done / total * 100.0, 100.0)
             task.speed = data.get("_speed_str") or data.get("speed_str")
             task.eta = data.get("_eta_str") or data.get("eta_str")
+            # 每 1% 落一次盘：重启后至少能恢复到最近的整数进度，又不至于每帧写库
+            if task.progress - task._persisted_progress >= 1.0:
+                task._persisted_progress = task.progress
+                self.persist(task)
         elif status == "finished":
             # 有两类 finished：某一路流下载完成（带 downloaded_bytes），
             # 以及后期处理结束（不带）。前者要把字节数记账，后者只是清阶段提示
@@ -655,12 +725,14 @@ class DownloadManager:
                 task.stage = None
             task.speed = None
             task.eta = None
+            self.persist(task)
         elif status == "started":
             # postprocessor 钩子没有名字（yt-dlp 只传 status），只能给个通用阶段；
             # 它的意义是让前端知道「下载已结束、正在合并/转码」，而不是卡在 100%
             task.stage = "合并 / 转码中"
             task.speed = None
             task.eta = None
+            self.persist(task)
 
     @staticmethod
     def _progress_totals(data: dict, task: DownloadTask) -> tuple:
@@ -714,6 +786,8 @@ class DownloadManager:
         inactive.sort(key=lambda x: x[1])
         for k, _ in inactive:
             del self.tasks[k]
+            if self._store is not None:
+                self._store.delete(k)
             if len(self.tasks) < MAX_TASKS:
                 return
         # 仍超限：取消并清理最老的排队任务（线程 acquire 后自查返回，不产生孤儿下载）
@@ -726,5 +800,7 @@ class DownloadManager:
         for k, _ in queued:
             self.tasks[k].status = "cancelled"
             del self.tasks[k]
+            if self._store is not None:
+                self._store.delete(k)
             if len(self.tasks) < MAX_TASKS:
                 break
