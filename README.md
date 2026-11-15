@@ -32,7 +32,7 @@
 | 输出格式 | 产物 |
 |---|---|
 | 最佳格式（默认） | 不改编码与容器，直接取站点最高画质，可能是 webm / AV1 |
-| MP4 视频（最高 mp4 画质） | 不限分辨率，直接取站点最高画质 + m4a 音频合并 |
+| MP4 视频（最高 mp4 画质） | 不限分辨率，mp4 视频 + m4a 音频合并 |
 | MP4 4K / 2K / 1080p / 720p / 480p | 按分辨率上限选流，源更高时自动降档 |
 | MP4 H.264 | 优先 `avc1`，老设备与剪辑软件只认它 |
 | MP3 320 / 192 / 128 kbps | 只下音轨后转码 |
@@ -89,7 +89,6 @@ docker compose up -d
 ### 从源码构建镜像
 
 ```bash
-git clone https://github.com/dremous/yt-dlp-webui.git
 git clone https://github.com/dremous/yt-dlp-webui.git
 cd yt-dlp-webui
 docker build -t yt-dlp-webui .
@@ -229,7 +228,7 @@ docker exec yt-dlp-webui tail -n 100 /config/webui.log    # 或进容器看
 - 完全不想落盘：`LOG_FILE=none`
 - 只写文件、不要 `docker logs`：`LOG_CONSOLE=0`
 - 想看更细：`LOG_LEVEL=DEBUG`
-- 日志里每 30 秒一条 `GET /api/formats` 是 Docker 的 HEALTHCHECK 探活，已默认静默（失败时仍会打印）
+- 日志里每 30 秒一条 `GET /api/formats` 是 Docker 的 HEALTHCHECK 探活，已默认静音（失败时仍会打印）
 
 > 也可以交给 Docker 自己轮转：`--log-opt max-size=10m --log-opt max-file=5`。
 > 两者不冲突——文件那份方便拷走，`docker logs` 那份方便 `docker logs -f`。
@@ -263,7 +262,7 @@ python -m unittest discover -s tests -v
 | `PROXY_FILE` | `/config/proxy.txt` | 代理地址文件路径（一行 URL，由界面写入） |
 | `HTTP_CHUNK_SIZE` | `512M` | 单块大小，支持 `512M` / `1024K` / 字节数；`0` = 不分块 |
 | `TASKS_DB` | `<COOKIE_FILE 所在目录>/tasks.db` | 任务记录库（SQLite）路径，默认与 Cookie 同卷 |
-| `ACCESS_LOG_QUIET` | `1` | 置 `0` 恢复每条请求的 access log；默认静默成功的 `/api/tasks`、`/api/files` 轮询与 `/api/formats` 健康检查 |
+| `ACCESS_LOG_QUIET` | `1` | 置 `0` 恢复每条请求的 access log；默认静音成功的 `/api/tasks`、`/api/files` 轮询与 `/api/formats` 健康检查 |
 | `LOG_FILE` | `/config/webui.log` | 运行日志文件路径；置 `none` 则只走 `docker logs` |
 | `LOG_LEVEL` | `INFO` | 日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` |
 | `LOG_MAX_MB` | `10` | 单个日志文件上限（MB），超出后轮转；`0` = 不轮转 |
