@@ -37,8 +37,8 @@ from .downloader import (
     DEFAULT_FORMAT,
     ENDED_STATES,
     FORMATS,
-    TMP_SUFFIXES,
     DownloadManager,
+    is_temp_name,
     normalize_proxy,
 )
 from .accesslog import install as install_access_log_filter
@@ -162,25 +162,28 @@ def cleanup_tasks():
 @app.get("/api/files")
 def list_files():
     files = []
-    root = DOWNLOAD_DIR.resolve()
-    # 递归扫描（每个任务在独立子目录中），返回相对路径；排除 .part 等临时文件
+    # 用 absolute() 而不是 resolve()：DOWNLOAD_DIR 是符号链接时，rglob 返回的
+    # 路径仍带链接前缀，拿 resolve() 后的真实路径做 relative_to 会抛 ValueError。
+    root = DOWNLOAD_DIR.absolute()
+    # 递归扫描（每个任务在独立子目录中），返回相对路径；排除 .part / .part-FragN 等临时文件
     scanned = []
     try:
         it = DOWNLOAD_DIR.rglob("*")
         for p in it:
-            if not p.is_file() or p.name.endswith(TMP_SUFFIXES):
+            if not p.is_file() or is_temp_name(p.name):
                 continue
             try:
                 st = p.stat()
-            except OSError:
-                continue  # 扫描期间文件被并发删除，跳过而非报错
-            scanned.append((p, st.st_mtime, st.st_size))
+                name = p.absolute().relative_to(root).as_posix()
+            except (OSError, ValueError):
+                continue  # 扫描期间文件被并发删除 / 路径异常，跳过而非报错
+            scanned.append((name, st.st_mtime, st.st_size))
     except OSError:
         pass  # rglob 遍历中目录被并发删除，整体容错
     scanned.sort(key=lambda x: x[1], reverse=True)
-    for p, mtime, size in scanned:
+    for name, mtime, size in scanned:
         files.append({
-            "name": p.relative_to(root).as_posix(),
+            "name": name,
             "size": size,
             "mtime": int(mtime),
         })
