@@ -157,7 +157,7 @@ class AdoptPartialTest(unittest.TestCase):
 
         self.assertIn("2 个分片", summary)
         # 视频下完才会轮到音频，但两个残片都接管过来，音频一步就能接着下
-        self.assertEqual(len(list(new_dir.glob("*.part"))), 2)
+        self.assertEqual(len(list(new_dir.glob('*.part'))), 2)
 
     def test_fragments_and_ytdl_are_adopted(self):
         """HLS/DASH 分片是 `.part-FragN`，断点续传也必须接管它们。"""
