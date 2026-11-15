@@ -68,8 +68,9 @@ class AdoptPartialTest(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _task(self, task_id: str, status: str, url: str = "https://example.com/v"):
-        task = DownloadTask(task_id, url, "mp4")
+    def _task(self, task_id: str, status: str,
+              url: str = "https://example.com/v", fmt: str = "mp4"):
+        task = DownloadTask(task_id, url, fmt)
         task.status = status
         with self.manager._lock:
             self.manager.tasks[task_id] = task
@@ -115,6 +116,19 @@ class AdoptPartialTest(unittest.TestCase):
         new_dir.mkdir()
 
         self.assertIsNone(self.manager._adopt_partial(task, new_dir))
+
+    def test_other_format_is_not_adopted(self):
+        # 4K 和 1080p 的 outtmpl 相同（都是 Title [id].mp4），残片名也一样；
+        # 但两条流的字节内容不同，接管后按 Range 续传会拼出损坏的视频
+        self._task("old", "failed", fmt="mp4_2160")
+        old_part = self._part("old", "Title [id].mp4.part", 1024)
+        task = self._task("new", "downloading", fmt="mp4_1080")
+        new_dir = self.root / "new"
+        new_dir.mkdir()
+
+        self.assertIsNone(self.manager._adopt_partial(task, new_dir))
+        self.assertTrue(old_part.exists(), "不同格式的残片应留在原目录")
+        self.assertEqual(list(new_dir.iterdir()), [])
 
     def test_largest_duplicate_wins(self):
         # 同一个链接失败过两次，两份同名残片只有一份能搬，取最接近下完的
