@@ -4,11 +4,13 @@
 上次下到 90% 的 .part 在磁盘上却没人认领，20GB 等于白下。
 """
 
+import sqlite3
 import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 if "yt_dlp" not in sys.modules:
     _stub = types.ModuleType("yt_dlp")
@@ -67,6 +69,19 @@ class TaskStoreTest(unittest.TestCase):
         store.save(_task("x"))
         self.assertEqual(store.load(), [])
 
+    def test_runtime_write_failure_disables_store_without_raising(self):
+        """初始化成功之后磁盘写满/被锁：写库失败不能把任务线程直接打死。"""
+        store = TaskStore(self.db)
+        store.save(_task("before"))
+        with mock.patch.object(
+            store, "_connect", side_effect=sqlite3.OperationalError("disk I/O error")
+        ):
+            store.save(_task("during"))
+
+        self.assertFalse(store.available)
+        # 失败前已经写入的记录仍然可读；本次运行只是不再尝试持久化。
+        self.assertEqual(TaskStore(self.db).load()[0]["id"], "before")
+
     def test_delete(self):
         store = TaskStore(self.db)
         store.save(_task())
@@ -123,6 +138,25 @@ class TaskStoreTest(unittest.TestCase):
         mgr = DownloadManager(Path(self._tmp.name) / "dl", store=TaskStore(self.db))
         mgr.remove_task("x")
         self.assertEqual(TaskStore(self.db).load(), [])
+
+    def test_remove_task_keeps_memory_when_store_delete_fails(self):
+        """删库失败时不要把内存记录先删掉，否则重启后任务会“复活”。"""
+        store = TaskStore(self.db)
+        store.save(_task("x", status="finished"))
+        mgr = DownloadManager(Path(self._tmp.name) / "dl", store=store)
+        task = _task("x", status="finished")
+        with mgr._lock:
+            mgr.tasks["x"] = task
+
+        with mock.patch.object(
+            store, "_connect", side_effect=sqlite3.OperationalError("disk I/O error")
+        ):
+            with self.assertRaises(ValueError):
+                mgr.remove_task("x")
+
+        self.assertIsNotNone(mgr.get("x"), "删库失败时任务应继续留在列表里")
+        self.assertFalse(store.available)
+        self.assertEqual(TaskStore(self.db).load()[0]["id"], "x")
 
     def test_hook_flushes_progress(self):
         store = TaskStore(self.db)
