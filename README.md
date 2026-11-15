@@ -20,7 +20,8 @@
   与 H.264 兼容版；音频支持 MP3 三档码率，以及不转码的原始音频
 - **实时进度**：百分比、速度、剩余时间，每 1.5 秒刷新
 - **并发任务**：最多 5 个同时下载，互不阻塞
-- **断点续传**：网络中断自动重试并续传（默认 20 次）；失败后重新提交同一链接，会把上次没下完的 `.part` 接管过来接着下，不必从 0 再来一遍
+- **断点续传**：网络中断自动重试并续传（默认 20 次，指数退避）；大文件按块下载，单次断流最多重下一块；失败后重新提交同一链接，
+  会把上次没下完的 `.part` 接管过来接着下，不必从 0 再来一遍
 - **登录 Cookie**：上传 `cookies.txt`，用于私享 / 会员 / 年龄受限内容
 - **文件与任务管理**：网页内下载、删除文件；已结束任务可单独删除或一键清理，任务记录最多保留 50 条
 
@@ -230,6 +231,7 @@ python -m unittest discover -s tests -v
 | `DOWNLOAD_DIR` | `/downloads` | 下载文件存放目录 |
 | `COOKIE_FILE` | `/config/cookies.txt` | Cookie 文件路径 |
 | `PROXY_FILE` | `/config/proxy.txt` | 代理地址文件路径（一行 URL，由界面写入） |
+| `HTTP_CHUNK_SIZE` | `512M` | 单块大小，支持 `512M` / `1024K` / 字节数；`0` = 不分块 |
 
 对外端口通过 `-p 8080:8080` 映射，容器内固定监听 8080。
 
@@ -293,7 +295,8 @@ python -m unittest discover -s tests -v
     ├── test_tasklog.py           # 日志脱敏与摘要
     ├── test_task_lifecycle.py    # 任务删除与目录清理策略
     ├── test_resume_and_proxy.py  # 断点续传接管与代理地址规范化
-    └── test_formats.py           # 输出格式预设的完整性
+    ├── test_formats.py           # 输出格式预设的完整性
+    └── test_chunk_size.py        # HTTP_CHUNK_SIZE 单位解析
 ```
 
 ## 说明
