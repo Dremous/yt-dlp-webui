@@ -34,6 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .downloader import (
+    DEFAULT_FORMAT,
     ENDED_STATES,
     FORMATS,
     TMP_SUFFIXES,
@@ -64,7 +65,10 @@ app = FastAPI(title="yt-dlp WebUI", version="1.0.0")
 
 class DownloadRequest(BaseModel):
     url: str = Field(..., max_length=2048, description="视频 / 音频 URL")
-    format: str = Field("mp4", description="输出格式：mp4 / best / mp3")
+    format: str = Field(
+        DEFAULT_FORMAT,
+        description="输出格式的预设 id，取值见 GET /api/formats（如 best / mp4 / mp4_1080 / mp3 / m4a）",
+    )
 
 
 class ProxyRequest(BaseModel):
