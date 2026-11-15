@@ -20,7 +20,8 @@ if "yt_dlp" not in sys.modules:
 from app.downloader import DEFAULT_FORMAT, FORMATS
 
 # 历史上就存在的档位：前端默认值、API 调用方和文档都在用，不能删
-LEGACY_IDS = ("mp4", "best", "mp3")
+# （best 不在此列：它是这轮新增的默认档，见 DEFAULT_FORMAT）
+LEGACY_IDS = ("mp4", "mp3")
 
 VIDEO_IDS = ("mp4", "mp4_2160", "mp4_1440", "mp4_1080", "mp4_720", "mp4_480",
              "mp4_avc", "best")

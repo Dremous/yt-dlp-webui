@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Button,
   Card,
@@ -16,18 +16,28 @@ import { api } from "../api.js";
 
 export default function DownloadForm({ formats, onSubmit }) {
   const [url, setUrl] = useState("");
-  const [format, setFormat] = useState("best");
+  const [format, setFormat] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // 默认档由 /api/formats 的首项决定（后端 DEFAULT_FORMAT 排在第一位），
+  // 前端不再硬编码 id：后端改默认时界面会自动跟上，不会预选一个已被删掉的档位。
+  useEffect(() => {
+    if (formats.length && !formats.some((f) => f.id === format)) {
+      setFormat(formats[0].id);
+    }
+  }, [formats, format]);
 
   async function handleSubmit(e) {
     e.preventDefault();
     const trimmed = url.trim();
     if (!trimmed) return;
+    const target = format || formats[0]?.id;
+    if (!target) return; // 格式列表还没加载出来，按钮此时也不该可用
     setLoading(true);
     setError("");
     try {
-      await api.download(trimmed, format);
+      await api.download(trimmed, target);
       setUrl("");
       addToast({
         title: "任务已提交",
@@ -72,7 +82,7 @@ export default function DownloadForm({ formats, onSubmit }) {
             />
             <Select
               label="输出格式"
-              selectedKeys={[format]}
+              selectedKeys={format ? [format] : []}
               onSelectionChange={(keys) => {
                 const k = Array.from(keys)[0];
                 if (k) setFormat(String(k));
