@@ -66,13 +66,20 @@ export default function App() {
       .catch((e) => console.warn("加载文件失败", e));
   }, []);
 
-  // 轮询任务与文件
+  // 有任务在跑才高频轮询；空闲时放慢，避免 /api/tasks 把日志和 CPU 都占住
+  const hasActiveTask = tasks.some(
+    (t) => t.status === "queued" || t.status === "downloading"
+  );
+
+  useEffect(() => {
+    refreshFiles();
+  }, [refreshFiles]);
+
   useEffect(() => {
     refreshTasks();
-    refreshFiles();
-    const timer = setInterval(refreshTasks, 1500);
+    const timer = setInterval(refreshTasks, hasActiveTask ? 1500 : 10000);
     return () => clearInterval(timer);
-  }, [refreshTasks, refreshFiles]);
+  }, [refreshTasks, hasActiveTask]);
 
   const afterSubmit = useCallback(() => refreshTasks(), [refreshTasks]);
 

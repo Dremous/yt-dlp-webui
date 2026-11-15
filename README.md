@@ -237,6 +237,7 @@ python -m unittest discover -s tests -v
 | `PROXY_FILE` | `/config/proxy.txt` | 代理地址文件路径（一行 URL，由界面写入） |
 | `HTTP_CHUNK_SIZE` | `512M` | 单块大小，支持 `512M` / `1024K` / 字节数；`0` = 不分块 |
 | `TASKS_DB` | `<COOKIE_FILE 所在目录>/tasks.db` | 任务记录库（SQLite）路径，默认与 Cookie 同卷 |
+| `ACCESS_LOG_QUIET` | `1` | 置 `0` 恢复每条请求的 access log；默认静音成功的 `/api/tasks`、`/api/files` 轮询 |
 
 对外端口通过 `-p 8080:8080` 映射，容器内固定监听 8080。
 
@@ -304,7 +305,8 @@ python -m unittest discover -s tests -v
     ├── test_formats.py           # 输出格式预设的完整性
     ├── test_chunk_size.py        # HTTP_CHUNK_SIZE 单位解析
     ├── test_progress.py          # 多流进度累计与后期处理阶段
-    └── test_task_store.py        # 任务持久化与重启恢复
+    ├── test_task_store.py        # 任务持久化与重启恢复
+    └── test_access_log.py        # 轮询日志过滤
 ```
 
 ## 说明
