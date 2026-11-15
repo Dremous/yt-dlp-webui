@@ -49,6 +49,9 @@ ENV APP_VERSION=${APP_VERSION}
 # 运行日志落盘位置（/config 是持久卷）；置 none 则只走 docker logs
 ENV LOG_FILE=/config/webui.log
 
+# 容器监听端口；健康检查跟随同一变量，避免自定义 PORT 后探活仍打 8080
+ENV PORT=8080
+
 # ffmpeg：用于视频合并与音频转码（mp3 提取必需）
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
@@ -83,9 +86,9 @@ COPY --from=web-builder /app/app/static ./app/static
 
 EXPOSE 8080
 
-# 健康检查：curl 探活 API 端点
+# 健康检查：curl 探活 API 端点（端口跟 serve.py 的 PORT 保持一致）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-  CMD curl -fs http://127.0.0.1:8080/api/formats || exit 1
+  CMD curl -fs "http://127.0.0.1:${PORT:-8080}/api/formats" || exit 1
 
 # 卷：下载文件与配置（Cookie / 代理）持久化
 VOLUME /downloads /config
