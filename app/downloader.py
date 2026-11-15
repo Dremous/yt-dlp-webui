@@ -613,15 +613,18 @@ class DownloadManager:
         - 目标目录已有同名文件时跳过，不覆盖；
         - 搬走后旧目录只剩日志，删除历史任务不会误删正在续传的数据。
 
-        只从已结束（failed / cancelled / finished）的任务里取：正在下载的任务是活动写者，
-        它的 .part 不能动。同名的多个残片取最大的那份（重复失败时它最接近下完）。
+        只从已结束（failed / cancelled / finished）且**格式相同**的任务里取：不同分辨率的
+        预设共用同一个 outtmpl，残片同名但字节内容不同，混着接管会拼出损坏的视频。
+        正在下载的任务是活动写者，它的 .part 不能动。同名的多个残片取最大的那份（重复失败时它最接近下完）。
         返回给日志用的一句话摘要，没接管到任何东西时返回 None。
         """
         candidates = []
         with self._lock:
             donors = [
                 t.id for t in self.tasks.values()
-                if t.id != task.id and t.url == task.url and t.status in ENDED_STATES
+                if t.id != task.id and t.url == task.url
+                and t.format == task.format
+                and t.status in ENDED_STATES
             ]
         for donor_id in donors:
             donor_dir = self.download_dir / donor_id
