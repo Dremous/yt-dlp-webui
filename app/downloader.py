@@ -112,6 +112,26 @@ FORMATS: Dict[str, dict] = {
 MAX_CONCURRENT = 5     # 最大并发下载数
 MAX_TASKS = 50         # 内存中保留的最大任务记录数（正常手工下载几乎不会触顶，仅防脚本刷任务）
 
+
+def _parse_size(raw: str) -> int:
+    """解析 `512M` / `1024K` / 纯字节的配置值；0、空串、写错一律当「不分块」。"""
+    raw = (raw or "").strip().lower()
+    if raw in ("", "0", "off", "none"):
+        return 0
+    unit = {"k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}.get(raw[-1:], 1)
+    num = raw[:-1] if raw[-1:] in ("k", "m", "g") else raw
+    try:
+        return int(float(num) * unit)
+    except ValueError:
+        return 0  # 配置写错就退回单连接，不让手误拖垮下载
+
+
+# 单块大小（字节），0 = 不分块、一条连接直下。
+# yt-dlp 的 http 下载器每块结束时会主动换连接（NextFragment，且不消耗重试次数），
+# 所以块越小连接越密、越容易被服务端按频次限流；块越大则单次失败重下的越多。
+# 默认 512M：20GB 的文件约 38 次请求，单次断流最多损失 512MB。
+HTTP_CHUNK_SIZE = _parse_size(os.environ.get("HTTP_CHUNK_SIZE", "512M"))
+
 # 下载中可能残留的临时/中间文件后缀，不视作最终产物（列表扫描时同样过滤）
 # 注意：.log 是失败时留下的排查日志，必须排除，否则会被当成下载好的成品返回给前端
 TMP_SUFFIXES = (
@@ -445,6 +465,9 @@ class DownloadManager:
                 "http": lambda n: min(2 ** n, 30),
                 "fragment": lambda n: min(2 ** n, 30),
             },
+            # 大文件分块下载：每块结束主动换一条连接，单次断流最多重下这一块。
+            # 512M 对 20GB 约 38 次请求，既不会把连接拆得过碎，也不会一次丢掉几十 GB。
+            "http_chunk_size": HTTP_CHUNK_SIZE,
             # verbose + 自定义 logger：把 debug 级输出交给 TaskLogger。
             # 这里刻意不设 quiet / no_warnings —— 它们会把错误原因静音，
             # 像偶发 403 这类问题就完全无从排查。
