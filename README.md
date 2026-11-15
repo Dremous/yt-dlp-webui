@@ -344,6 +344,7 @@ python -m unittest discover -s tests -v
     ├── test_progress.py          # 多流进度累计与后期处理阶段
     ├── test_task_store.py        # 任务持久化、坏库隔离与重启恢复
     ├── test_access_log.py        # 轮询日志过滤
+    ├── test_cookie_upload.py     # Cookie 上传大小限制
     └── test_log_config.py        # 日志落盘与轮转
 ```
 
