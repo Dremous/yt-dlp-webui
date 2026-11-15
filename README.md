@@ -16,12 +16,22 @@
 
 ### 下载
 
-- **三种输出格式**：MP4 视频、最佳画质（原始格式）、MP3 音频（192kbps）
+- **多档输出格式**：默认「最佳格式」（不转码，直接拿站点最高画质）；MP4 另有 4K 到 480p 逐档可选
+  与 H.264 兼容版；音频支持 MP3 三档码率，以及不转码的原始音频
 - **实时进度**：百分比、速度、剩余时间，每 1.5 秒刷新
 - **并发任务**：最多 5 个同时下载，互不阻塞
 - **断点续传**：网络中断自动重试并续传（默认 20 次）；失败后重新提交同一链接，会把上次没下完的 `.part` 接管过来接着下，不必从 0 再来一遍
 - **登录 Cookie**：上传 `cookies.txt`，用于私享 / 会员 / 年龄受限内容
 - **文件与任务管理**：网页内下载、删除文件；已结束任务可单独删除或一键清理，任务记录最多保留 50 条
+
+| 输出格式 | 产物 |
+|---|---|
+| 最佳格式（默认） | 不改编码与容器，直接取站点最高画质，可能是 webm / AV1 |
+| MP4 视频（最高 mp4 画质） | 不限分辨率，mp4 视频 + m4a 音频合并 |
+| MP4 4K / 2K / 1080p / 720p / 480p | 按分辨率上限选流，源更高时自动降档 |
+| MP4 H.264 | 优先 `avc1`，老设备与剪辑软件只认它 |
+| MP3 320 / 192 / 128 kbps | 只下音轨后转码 |
+| 原始音频（不转码） | 直接抽出 AAC / Opus，最快最无损 |
 
 ### 国内网络
 
@@ -191,7 +201,7 @@ YouTube 的播放地址带 JS 挑战（`n` 参数签名），yt-dlp 需要外部
 
 > 前置设置：GitHub 仓库 `Settings → Packages` 中启用 GHCR；首次使用时需为镜像设置可见性。
 > 无需额外密钥——workflow 使用内置的 `GITHUB_TOKEN` 自动完成 GHCR 登录。
-> 可选配置 `secrets.WEBHOOK_URL`（飞书 / 企业微信 / 钉钉机器人），构建失败时推送告警。
+> 可选配置 `secrets.WEBHOOK_URL`（飞书 / 企业微信 / 钃钉机器人），构建失败时推送告警。
 
 ### 本地开发
 
@@ -229,7 +239,7 @@ python -m unittest discover -s tests -v
 |---|---|---|
 | GET | `/` | Web 界面 |
 | GET | `/api/formats` | 可用输出格式 |
-| POST | `/api/download` | 提交下载任务，body: `{"url": "...", "format": "mp4"}` |
+| POST | `/api/download` | 提交下载任务，body: `{"url": "...", "format": "best"}`（`format` 缺省即 `best`）；取值见 `/api/formats` |
 | GET | `/api/tasks?limit=N` | 任务列表（含进度与全量已结束计数 `ended`；limit 默认 30，上限 50） |
 | POST | `/api/tasks/{task_id}/cancel` | 取消排队/下载中的任务（失败/已取消任务不可取消） |
 | DELETE | `/api/tasks/{task_id}` | 删除一个已结束的任务记录（失败/取消的任务连带清理任务目录，已完成的保留文件） |
@@ -282,7 +292,8 @@ python -m unittest discover -s tests -v
 └── tests/
     ├── test_tasklog.py           # 日志脱敏与摘要
     ├── test_task_lifecycle.py    # 任务删除与目录清理策略
-    └── test_resume_and_proxy.py  # 断点续传接管与代理地址规范化
+    ├── test_resume_and_proxy.py  # 断点续传接管与代理地址规范化
+    └── test_formats.py           # 输出格式预设的完整性
 ```
 
 ## 说明
