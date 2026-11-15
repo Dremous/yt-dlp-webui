@@ -66,10 +66,18 @@ export default function App() {
       .catch((e) => console.warn("加载文件失败", e));
   }, []);
 
-  // 有任务在跑才高频轮询；空闲时放慢，避免 /api/tasks 把日志和 CPU 都占住
-  const hasActiveTask = tasks.some(
-    (t) => t.status === "queued" || t.status === "downloading"
-  );
+  // 文件列表只在挂载时加载；有任务结束（完成/失败/取消）时再刷新一次，
+  // 否则下载完了文件列表仍是旧的，和界面上「完成后自动出现」的文案不符
+  const prevEnded = useRef(0);
+  useEffect(() => {
+    if (taskEnded > prevEnded.current) refreshFiles();
+    prevEnded.current = taskEnded;
+  }, [taskEnded, refreshFiles]);
+
+  // 用全量计数判断有没有活动任务：tasks 只有最近 30 条，一个长任务被
+  // 后面新提交的短任务挤出列表时，不能误判成空闲去降频轮询
+  const activeCount = Math.max(0, taskTotal - taskEnded);
+  const hasActiveTask = activeCount > 0;
 
   useEffect(() => {
     refreshFiles();
