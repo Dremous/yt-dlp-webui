@@ -11,6 +11,7 @@
 """
 
 import logging
+import math
 import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -33,6 +34,22 @@ def _flag(value: Optional[str], default: str = "1") -> bool:
     return (value if value is not None else default).strip().lower() not in (
         "0", "false", "off", "no", "none", ""
     )
+
+
+def _max_bytes(value: Optional[str]) -> int:
+    """把 LOG_MAX_MB 转成字节；非法/非有限值回退默认值，不让启动流程崩掉。"""
+    default = int(float(DEFAULT_MAX_MB) * 1024 * 1024)
+    raw = (value or DEFAULT_MAX_MB).strip()
+    try:
+        mb = float(raw)
+    except ValueError:
+        return default
+    if not math.isfinite(mb) or mb < 0:
+        return default
+    try:
+        return int(mb * 1024 * 1024)
+    except (OverflowError, ValueError):
+        return default
 
 
 def setup_logging(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
@@ -72,7 +89,7 @@ def setup_logging(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
     if file_path:
         try:
             Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-            max_bytes = int(float(source.get("LOG_MAX_MB") or DEFAULT_MAX_MB) * 1024 * 1024)
+            max_bytes = _max_bytes(source.get("LOG_MAX_MB"))
             backups = int(source.get("LOG_BACKUPS") or DEFAULT_BACKUPS)
             handler = RotatingFileHandler(
                 file_path, maxBytes=max(0, max_bytes), backupCount=max(0, backups),
