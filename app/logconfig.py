@@ -83,8 +83,15 @@ def setup_logging(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
             root.addHandler(handler)
             saved = file_path
         except (OSError, ValueError) as exc:
+            # 用户可能同时关了控制台：此时若一个 handler 都没有，
+            # 连这条 warning 都会被吞掉，等于全部日志静默消失
+            if not root.handlers:
+                fallback = logging.StreamHandler()
+                fallback.setFormatter(fmt)
+                setattr(fallback, _OWNED, True)
+                root.addHandler(fallback)
             logging.getLogger(__name__).warning(
-                "日志文件不可用（%s）：%s；仅输出到控制台", file_path, exc
+                "日志文件不可用（%s）：%s；日志仅输出到控制台", file_path, exc
             )
 
     # uvicorn 自带的 handler 若还在，会导致同一条日志写两遍；统一交给 root

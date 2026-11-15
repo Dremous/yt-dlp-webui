@@ -48,6 +48,15 @@ class TaskStoreTest(unittest.TestCase):
         self.assertEqual(row["title"], "标题")
         self.assertEqual(row["filename"], "t1/v.mp4")
 
+    def test_corrupt_db_is_quarantined_and_rebuilt(self):
+        # 断电/磁盘写满后 SQLite 文件可能损坏；它不该让整个 WebUI 起不来
+        self.db.write_bytes(b"this is not a sqlite database")
+        store = TaskStore(self.db)  # 不应抛异常
+        store.save(_task("ok"))
+        self.assertEqual(TaskStore(self.db).load()[0]["id"], "ok")
+        backups = list(Path(self._tmp.name).glob("tasks.db.corrupt-*"))
+        self.assertEqual(len(backups), 1)
+
     def test_delete(self):
         store = TaskStore(self.db)
         store.save(_task())

@@ -9,8 +9,11 @@
 很小，配置卷本来就是「小、要持久」的定位，下载卷则可能塞满几十 GB 的成品。
 """
 
+import logging
+import os
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List
 
@@ -32,7 +35,28 @@ class TaskStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._init_schema()
+        try:
+            self._init_schema()
+        except (sqlite3.DatabaseError, sqlite3.OperationalError) as exc:
+            # 断电 / 磁盘写满后文件可能损坏。直接抛会让 import 阶段崩掉，
+            # 容器在 restart: unless-stopped 下无限重启，WebUI 完全打不开。
+            # 所以先把坏文件挪走留证，再重建一张空表。
+            backup = self._quarantine()
+            logging.getLogger(__name__).warning(
+                "任务库损坏（%s），已备份为 %s 并重建", exc, backup.name
+            )
+            self._init_schema()
+
+    def _quarantine(self) -> Path:
+        """把不可用的库文件改名留证；挪不动时抛 OSError（磁盘/权限问题另说）。"""
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        backup = self.path.with_name(f"{self.path.name}.corrupt-{stamp}")
+        index = 1
+        while backup.exists():
+            backup = self.path.with_name(f"{self.path.name}.corrupt-{stamp}-{index}")
+            index += 1
+        os.replace(self.path, backup)
+        return backup
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=10)

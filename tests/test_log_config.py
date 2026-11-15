@@ -48,6 +48,12 @@ class LogConfigTest(unittest.TestCase):
         names = [type(h).__name__ for h in logging.getLogger().handlers]
         self.assertIn("StreamHandler", names)
 
+    def test_unwritable_file_keeps_some_output_when_console_off(self):
+        # 关了控制台又写不了文件时，至少不能变成「一条日志都没有」
+        setup_logging({"LOG_FILE": "/dev/full/webui.log", "LOG_CONSOLE": "0"})
+        handlers = logging.getLogger().handlers
+        self.assertTrue(handlers, "没有任何日志出口，等于静默吞掉全部日志")
+
     def test_repeated_setup_does_not_duplicate_handlers(self):
         with tempfile.TemporaryDirectory() as tmp:
             log_file = str(Path(tmp) / "webui.log")
