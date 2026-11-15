@@ -114,16 +114,19 @@ MAX_TASKS = 50         # 内存中保留的最大任务记录数（正常手工�
 
 
 def _parse_size(raw: str) -> int:
-    """解析 `512M` / `1024K` / 纯字节的配置值；0、空串、写错一律当「不分块」。"""
+    """解析 `512M` / `1024K` / 纯字节的配置值；0、空串、负数、写错一律当「不分块」。"""
     raw = (raw or "").strip().lower()
     if raw in ("", "0", "off", "none"):
         return 0
     unit = {"k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}.get(raw[-1:], 1)
     num = raw[:-1] if raw[-1:] in ("k", "m", "g") else raw
     try:
-        return int(float(num) * unit)
-    except ValueError:
-        return 0  # 配置写错就退回单连接，不让手误拖垮下载
+        value = int(float(num) * unit)
+    except (ValueError, OverflowError):
+        # 写错或数值超出范围（inf）都退回单连接：这是模块级常量，
+        # 抛在 import 阶段等于容器起不来
+        return 0
+    return value if value > 0 else 0
 
 
 # 单块大小（字节），0 = 不分块、一条连接直下。

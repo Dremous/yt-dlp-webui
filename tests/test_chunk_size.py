@@ -44,6 +44,20 @@ class ParseSizeTest(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(_parse_size(raw), 0)
 
+    def test_negative_falls_back_to_single_connection(self):
+        # 负值放行会送进 yt-dlp 的 random.randint(int(size*0.95), size)，
+        # 在 randrange 里抛 ValueError，让之后每一个任务都失败
+        for raw in ("-1", "-5M", "-0.5M"):
+            with self.subTest(raw=raw):
+                self.assertEqual(_parse_size(raw), 0)
+
+    def test_non_finite_falls_back_to_single_connection(self):
+        # inf 走 int(float(...)) 会抛 OverflowError；那是模块级常量，
+        # 抛在 import 阶段就是容器起不来，比配置无效严重得多
+        for raw in ("inf", "Infinity", "nan"):
+            with self.subTest(raw=raw):
+                self.assertEqual(_parse_size(raw), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
