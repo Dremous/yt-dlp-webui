@@ -69,9 +69,19 @@ def _video_options(max_height: Optional[int] = None,
     return {"format": chain, "merge_output_format": "mp4"}
 
 
+# 默认档位：界面预选、API 未传 format 时都用它。改默认只改这一处（前端另有硬编码
+# 兜底值，见 web/src/components/DownloadForm.jsx）。
+DEFAULT_FORMAT = "best"
+
 FORMATS: Dict[str, dict] = {
-    # ---- 视频（MP4 容器）----
-    # 默认档：不设上限的「最高 mp4 画质」，与历史行为一致
+    # ---- 视频 ----
+    # 默认档：不转码，直接拿站点给的最高画质（可能是 webm / AV1）
+    "best": {
+        "label": "最佳格式（默认，保留原始编码）",
+        "options": {
+            "format": "bestvideo+bestaudio/best",
+        },
+    },
     "mp4": {
         "label": "MP4 视频（最高 mp4 画质）",
         "options": {
@@ -87,12 +97,6 @@ FORMATS: Dict[str, dict] = {
     "mp4_avc": {
         "label": "MP4 H.264（老设备 / 剪辑软件兼容）",
         "options": _video_options(prefer_avc=True),
-    },
-    "best": {
-        "label": "最佳画质（保留原始格式）",
-        "options": {
-            "format": "bestvideo+bestaudio/best",
-        },
     },
     # ---- 音频 ----
     "mp3": {"label": "MP3 音频（192kbps）", "options": _mp3_options("192")},
