@@ -5,6 +5,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 if "yt_dlp" not in sys.modules:
     _stub = types.ModuleType("yt_dlp")
@@ -150,6 +151,26 @@ class AdoptPartialTest(unittest.TestCase):
 
         self.assertIsNone(self.manager._adopt_partial(task, new_dir))
         self.assertEqual((new_dir / "video [id].f701.mp4.part").stat().st_size, 7)
+
+    def test_donor_directory_removed_during_scan_does_not_fail_new_task(self):
+        """捐赠者被并发删除时，iterdir 抛 OSError 不能被当成新任务失败。"""
+        self._task("old", "failed")
+        self._part("old", "video [id].f701.mp4.part", 10)
+        task = self._task("new", "downloading")
+        new_dir = self.root / "new"
+        new_dir.mkdir()
+        donor_dir = self.root / "old"
+        real_iterdir = Path.iterdir
+
+        def flaky_iterdir(path):
+            if path == donor_dir:
+                raise FileNotFoundError("donor removed")
+            return real_iterdir(path)
+
+        with mock.patch.object(Path, "iterdir", flaky_iterdir):
+            self.assertIsNone(self.manager._adopt_partial(task, new_dir))
+        self.assertFalse(new_dir.exists() and any(new_dir.iterdir()),
+                         "捐赠者被删时应按没接管到处理，不能搬出半截文件")
 
 
 if __name__ == "__main__":

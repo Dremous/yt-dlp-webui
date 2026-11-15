@@ -207,6 +207,13 @@ class MainRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual([item["name"] for item in response.json()], ["keep.mp4"])
 
+    def test_delete_missing_file_returns_404(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._set_download_dir(Path(tmp))
+            response = self.client.delete("/api/files/nope.mp4")
+
+        self.assertEqual(response.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()
