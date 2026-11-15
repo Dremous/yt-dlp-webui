@@ -431,6 +431,11 @@ class DownloadManager:
                 task.stage = None
                 task.speed = None
                 task.eta = None
+                # 与运行时失败保持一致：失败任务的进度归零，界面不会出现
+                # 「失败 + 87%」这种自相矛盾的状态。已下载的残片仍在任务目录，
+                # 点「重试」时 _adopt_partial 会按 .part 大小接管，不依赖这个数值。
+                task.progress = 0.0
+                task._persisted_progress = 0.0
                 task.error = RESTART_ERROR
                 self._store.save(task)
             restored.append(task)

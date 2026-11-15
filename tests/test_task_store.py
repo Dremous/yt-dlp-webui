@@ -72,7 +72,11 @@ class TaskStoreTest(unittest.TestCase):
         mgr = DownloadManager(Path(self._tmp.name) / "dl", store=TaskStore(self.db))
         self.assertEqual(mgr.get("a").status, "failed")
         self.assertIn("重启", mgr.get("a").error)
-        self.assertAlmostEqual(mgr.get("a").progress, 88.0)
+        # 失败就是失败：运行时失败会把进度清零，重启中断也得一致，
+        # 否则界面出现「失败 + 87%」这种自相矛盾的状态
+        self.assertEqual(mgr.get("a").progress, 0.0)
+        row = [r for r in TaskStore(self.db).load() if r["id"] == "a"][0]
+        self.assertEqual(row["progress"], 0.0)
         self.assertEqual(mgr.get("b").status, "failed")
         # 已结束的任务原样保留
         self.assertEqual(mgr.get("c").status, "finished")
