@@ -73,6 +73,22 @@ class TaskStoreTest(unittest.TestCase):
         store.delete("t1")
         self.assertEqual(TaskStore(self.db).load(), [])
 
+    def test_late_persist_does_not_resurrect_removed_task(self):
+        """删除任务后，后台线程晚到的 persist 不能把记录重新插回库里。
+
+        删除记录和终态落盘由不同线程执行：remove_task 先删库、后台线程随后
+        带着刚结束的状态调用 persist，旧实现会再 INSERT 一次，任务从列表里
+        “消失”但在重启后又回来。
+        """
+        mgr = DownloadManager(Path(self._tmp.name) / "dl", store=TaskStore(self.db))
+        task = _task("x", status="finished")
+        with mgr._lock:
+            mgr.tasks["x"] = task
+        mgr.persist(task)
+        mgr.remove_task("x")
+        mgr.persist(task)
+        self.assertEqual(TaskStore(self.db).load(), [])
+
     def test_restore_marks_interrupted_as_failed(self):
         store = TaskStore(self.db)
         store.save(_task("a", status="downloading", progress=88.0))

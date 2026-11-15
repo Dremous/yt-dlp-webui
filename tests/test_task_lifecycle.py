@@ -11,8 +11,10 @@
 
 import contextlib
 import io
+import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -141,6 +143,22 @@ class CountEndedTest(RemovalTestBase):
         self._seed("c6", "downloading")
 
         self.assertEqual(self.manager.count_ended(), 0)
+
+
+class TaskOutputTest(RemovalTestBase):
+    def test_part_fragment_is_not_treated_as_output(self):
+        """`.part-FragN` 是 HLS/DASH 分片的临时文件，不能当成成品返回。"""
+        task_dir = self._seed(
+            "e1", "finished", ["video.mp4", "video.mp4.part-Frag12"]
+        )
+        os.utime(task_dir / "video.mp4.part-Frag12", (time.time() + 60,) * 2)
+
+        self.assertEqual(self.manager._task_output(task_dir), "e1/video.mp4")
+
+    def test_only_part_fragments_returns_no_output(self):
+        task_dir = self._seed("e2", "failed", ["video.mp4.part-Frag1"])
+
+        self.assertIsNone(self.manager._task_output(task_dir))
 
 
 class ReportFailureTest(RemovalTestBase):
