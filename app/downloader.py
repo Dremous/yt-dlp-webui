@@ -7,10 +7,12 @@
 - Cookie 与代理都以「文件持久化 + 内存缓存」的方式提供，改完立即对新任务生效。
 """
 
+import logging
 import os
 import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -22,6 +24,8 @@ import yt_dlp
 
 from .store import TaskStore
 from .tasklog import TaskLogger
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 输出格式预设
@@ -269,6 +273,8 @@ class DownloadManager:
         self._slots = threading.BoundedSemaphore(MAX_CONCURRENT)
         self._proxy: Optional[str] = None  # 当前生效的代理地址（None = 直连）
         self._store = store
+        # 正在删除的任务：remove_task 删库成功到删内存之间，persist 不能再 INSERT
+        self._deleting: set = set()
         self._load_proxy()
         if self._store is not None:
             self._restore_tasks()
@@ -283,15 +289,35 @@ class DownloadManager:
     def save_cookie(self, data: bytes) -> None:
         """保存 Cookie 文件内容（供后端上传接口调用），并收紧文件权限。
 
-        采用「临时文件 + 原子替换」写入，避免并发下载读取到写了一半的 cookie。
+        采用「临时文件 + 原子替换」写入，避免并发下载读取到写了一半的 cookie；
+        临时文件名由 mkstemp 唯一生成，并发上传不会互相覆盖同一个 .tmp。
         """
         if self.cookie_file is None:
             raise ValueError("未配置 COOKIE_FILE，无法保存 Cookie")
-        self.cookie_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.cookie_file.with_name(self.cookie_file.name + ".tmp")
-        tmp.write_bytes(data)
-        os.chmod(tmp, 0o600)  # Cookie 含敏感登录凭证，限制为本用户可读写
-        os.replace(tmp, self.cookie_file)  # 原子替换，读者不会读到半截内容
+        self._atomic_write(self.cookie_file, data, binary=True)
+
+    def _atomic_write(self, path: Path, data, *, binary: bool) -> None:
+        """写入同目录临时文件后原子替换；失败时清理临时文件。"""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
+        )
+        tmp = Path(tmp_name)
+        try:
+            if binary:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+            else:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(data)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     def remove_cookie(self) -> None:
         """删除已保存的 Cookie 文件。"""
@@ -334,11 +360,7 @@ class DownloadManager:
         if self.proxy_file is None:
             raise ValueError("未配置 PROXY_FILE，无法保存代理")
         proxy = normalize_proxy(url)  # 非法地址在落盘前就拒绝
-        self.proxy_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.proxy_file.with_name(self.proxy_file.name + ".tmp")
-        tmp.write_text(proxy + "\n", encoding="utf-8")
-        os.chmod(tmp, 0o600)  # 代理地址可能含 user:password，限制为本用户可读写
-        os.replace(tmp, self.proxy_file)
+        self._atomic_write(self.proxy_file, proxy + "\n", binary=False)
         with self._lock:
             self._proxy = proxy  # 立即对后续任务生效，无需重启容器
         return proxy
@@ -428,15 +450,15 @@ class DownloadManager:
     def persist(self, task: DownloadTask) -> None:
         """把任务当前状态写盘；任务已被删除或没配置 store 时什么也不做。
 
-        删除与落盘必须串行：remove_task 先删内存记录、再删 SQLite 行，如果
-        后台线程随后才带着终态调用 persist，旧实现会重新 INSERT，任务会在
-        重启后“复活”。这里在同一把锁内确认任务还在、且是同一个对象，避免
-        晚到的落盘把已删记录插回去。
+        删除与落盘通过 _deleting 墓碑串行：remove_task 先在锁内登记墓碑，再
+        删库、删内存；后台线程随后带着终态调用 persist 时，墓碑会让它直接返回。
+        只检查 self.tasks 里“对象是否还在”不够，因为删库成功到删内存之间
+        存在一个窗口，晚到的 INSERT 会让任务在重启后“复活”。
         """
         if self._store is None:
             return
         with self._lock:
-            if self.tasks.get(task.id) is not task:
+            if task.id in self._deleting or self.tasks.get(task.id) is not task:
                 return
             self._store.save(task)
 
@@ -449,10 +471,25 @@ class DownloadManager:
         """
         rows = self._store.load()
         if len(rows) > MAX_TASKS:
-            # 与内存上限保持一致：尾部留最新 MAX_TASKS 条，其余连同记录一起清掉
-            for row in rows[:-MAX_TASKS]:
-                self._store.delete(row["id"])
-            rows = rows[-MAX_TASKS:]
+            # 与内存上限保持一致：尾部留最新 MAX_TASKS 条，其余连同记录一起清掉。
+            # 删库失败时不能只截断内存 rows：必须把没删掉的旧行继续留在内存里，
+            # 否则界面看不到、DB 里还在，下次启动又会冒出来。
+            old_rows = rows[:-MAX_TASKS]
+            deleted_ids = set()
+            trim_failed = False
+            for row in old_rows:
+                if not self._store.delete(row["id"]):
+                    trim_failed = True
+                    break
+                deleted_ids.add(row["id"])
+            if trim_failed:
+                rows = [row for row in rows if row["id"] not in deleted_ids]
+                log.warning(
+                    "任务库启动裁剪未完成：%d 条旧记录仍保留在库中",
+                    len(rows) - MAX_TASKS,
+                )
+            else:
+                rows = rows[-MAX_TASKS:]
 
         restored = []
         for row in rows:
@@ -486,6 +523,12 @@ class DownloadManager:
     # ------------------------------------------------------------------
     # 任务删除（只处理已结束的任务，避免与后台线程争抢同一目录）
     # ------------------------------------------------------------------
+    def _delete_record(self, task_id: str) -> bool:
+        """删除 SQLite 行；store 未配置或已降级时视为“无需删库”。"""
+        if self._store is None or not self._store.available:
+            return True
+        return self._store.delete(task_id)
+
     def remove_task(self, task_id: str) -> dict:
         """删除一个已结束的任务记录，返回 {"id", "removed_files"}。
 
@@ -501,15 +544,21 @@ class DownloadManager:
                 raise KeyError(task_id)
             if task.status not in ENDED_STATES:
                 raise ValueError("任务尚未结束，请先取消")
+            self._deleting.add(task_id)
 
-        # 先删库、再删内存：删库失败时任务仍留在列表里，不会出现「界面已删、
-        # 重启后又复活」的状态；TaskStore.delete 失败会返回 False。
-        if self._store is not None and not self._store.delete(task_id):
-            raise ValueError("任务库当前不可用，任务未删除，请稍后重试")
+        try:
+            # 先删库、再删内存：删库失败时任务仍留在列表里，不会出现「界面已删、
+            # 重启后又复活」的状态；TaskStore.delete 失败会返回 False。
+            if self._store is not None and self._store.available:
+                if not self._store.delete(task_id):
+                    raise ValueError("任务库当前不可用，任务未删除，请稍后重试")
 
-        with self._lock:
-            if self.tasks.get(task_id) is task:
-                del self.tasks[task_id]
+            with self._lock:
+                if self.tasks.get(task_id) is task:
+                    del self.tasks[task_id]
+        finally:
+            with self._lock:
+                self._deleting.discard(task_id)
 
         # 目录清理放在锁外：rmtree 可能较慢，不该阻塞其他任务的状态读取。
         # 这里只是「尽力删除」：取消后后台线程要等下一次 progress hook 才退出，
@@ -529,19 +578,25 @@ class DownloadManager:
                 for tid, t in self.tasks.items()
                 if t.status in ENDED_STATES
             ]
+            self._deleting.update(tid for tid, _ in ended)
 
-        if self._store is None:
-            removed = ended
-        else:
-            removed = []
-            for tid, status in ended:
-                if not self._store.delete(tid):
-                    break  # 库不可用：已经删掉的部分保留，其余任务留在列表里
-                removed.append((tid, status))
+        removed = []
+        try:
+            if self._store is None or not self._store.available:
+                removed = ended
+            else:
+                for tid, status in ended:
+                    if not self._store.delete(tid):
+                        break  # 库不可用：已经删掉的部分保留，其余任务留在列表里
+                    removed.append((tid, status))
 
-        with self._lock:
-            for tid, _ in removed:
-                self.tasks.pop(tid, None)
+            with self._lock:
+                for tid, _ in removed:
+                    self.tasks.pop(tid, None)
+        finally:
+            with self._lock:
+                self._deleting.difference_update(tid for tid, _ in ended)
+
         for tid, status in removed:
             if status in ("failed", "cancelled"):
                 shutil.rmtree(self.download_dir / tid, ignore_errors=True)
@@ -741,7 +796,13 @@ class DownloadManager:
             donor_dir = self.download_dir / donor_id
             if not donor_dir.is_dir():
                 continue
-            for part in donor_dir.iterdir():
+            try:
+                parts = list(donor_dir.iterdir())
+            except OSError:
+                # 用户可能正好删除了捐赠者目录；这不是新任务失败的理由，
+                # 当作没接管到，本次从头下载即可。
+                continue
+            for part in parts:
                 # HLS/DASH 的 `.part-FragN` 和 yt-dlp 的 `.ytdl` 也是续传所需，
                 # 不能只 glob("*.part")；成品文件与日志/图片不在这里搬。
                 if not part.is_file():
@@ -828,8 +889,9 @@ class DownloadManager:
         return f"{summary}｜完整日志：{log_rel}" if log_rel else summary
 
     def _hook(self, data: dict, task: DownloadTask) -> None:
-        # 取消信号：一旦任务被标记为取消，立即终止 yt-dlp 下载
-        if task.status == "cancelled":
+        # 取消信号：一旦任务被标记为取消，立即终止 yt-dlp 下载。
+        # 状态由 cancel() 在锁内写入，这里统一走 _is_cancelled()，避免跨线程裸读。
+        if self._is_cancelled(task):
             raise DownloadCancelled()
         # progress / postprocessor 回调结构不同，用 .get 防御缺键
         status = data.get("status")
@@ -887,13 +949,21 @@ class DownloadManager:
     # ------------------------------------------------------------------
     def _task_output(self, task_dir: Path) -> Optional[str]:
         """返回任务子目录中最新的成品文件（排除临时/中间文件），相对下载目录的路径。"""
-        files = [
-            p for p in task_dir.iterdir()
-            if p.is_file() and not is_temp_name(p.name)
-        ]
-        if not files:
+        try:
+            entries = list(task_dir.iterdir())
+        except OSError:
+            return None  # 目录被并发删除时按没有成品处理
+        found = []
+        for p in entries:
+            try:
+                if not p.is_file() or is_temp_name(p.name):
+                    continue
+                found.append((p, p.stat().st_mtime))
+            except OSError:
+                continue  # 扫描期间文件被并发删除，跳过而非让任务失败
+        if not found:
             return None
-        newest = max(files, key=lambda p: p.stat().st_mtime)
+        newest = max(found, key=lambda item: item[1])[0]
         return newest.relative_to(self.download_dir).as_posix()
 
     def _trim_tasks(self) -> None:
@@ -912,9 +982,10 @@ class DownloadManager:
         ]
         inactive.sort(key=lambda x: x[1])
         for k, _ in inactive:
+            # 先删库；失败就保留这条内存记录，否则 DB 行会在重启后复活。
+            if not self._delete_record(k):
+                return
             del self.tasks[k]
-            if self._store is not None:
-                self._store.delete(k)
             if len(self.tasks) < MAX_TASKS:
                 return
         # 仍超限：取消并清理最老的排队任务（线程 acquire 后自查返回，不产生孤儿下载）
@@ -925,9 +996,9 @@ class DownloadManager:
         ]
         queued.sort(key=lambda x: x[1])
         for k, _ in queued:
+            if not self._delete_record(k):
+                break
             self.tasks[k].status = "cancelled"
             del self.tasks[k]
-            if self._store is not None:
-                self._store.delete(k)
             if len(self.tasks) < MAX_TASKS:
                 break
