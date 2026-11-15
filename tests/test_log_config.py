@@ -42,6 +42,18 @@ class LogConfigTest(unittest.TestCase):
             self.assertEqual(handlers[0].maxBytes, 5 * 1024 * 1024)
             self.assertEqual(handlers[0].backupCount, 3)
 
+    def test_non_finite_max_mb_falls_back_to_default(self):
+        """LOG_MAX_MB=inf 不能抛 OverflowError 把容器启动流程打断。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            log_file = Path(tmp) / "webui.log"
+            path = setup_logging({
+                "LOG_FILE": str(log_file), "LOG_MAX_MB": "inf", "LOG_CONSOLE": "0",
+            })
+            self.assertEqual(path, str(log_file))
+            handlers = [h for h in logging.getLogger().handlers if hasattr(h, "maxBytes")]
+            self.assertEqual(len(handlers), 1)
+            self.assertEqual(handlers[0].maxBytes, 10 * 1024 * 1024)
+
     def test_unwritable_path_falls_back_to_console(self):
         # /dev/full 是文件不是目录 → 建父目录会失败，但不能把容器带崩
         self.assertIsNone(setup_logging({"LOG_FILE": "/dev/full/webui.log", "LOG_CONSOLE": "1"}))
