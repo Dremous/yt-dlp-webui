@@ -19,6 +19,11 @@ class DockerfilePortTest(unittest.TestCase):
         self.assertIn("${PORT:-8080}:${PORT:-8080}", content)
         self.assertIn("PORT=${PORT:-8080}", content)
 
+    def test_image_does_not_hardcode_expose_port(self):
+        """EXPOSE 是静态元数据，写死 8080 会和运行时 PORT 不一致。"""
+        content = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        self.assertNotIn("EXPOSE 8080", content)
+
 
 if __name__ == "__main__":
     unittest.main()
