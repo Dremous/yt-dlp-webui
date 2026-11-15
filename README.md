@@ -24,6 +24,8 @@
 - **断点续传**：网络中断自动重试并续传（默认 20 次，指数退避）；大文件按块下载，单次断流最多回退到本块起点
   （块内断流还能靠 `.part` 从偏移继续，通常不必重下整块）；失败后重新提交同一链接，
   会把上次没下完的 `.part` 接管过来接着下，不必从 0 再来一遍
+- **任务持久化**：任务记录写入 SQLite，容器重启后仍在；重启时没跑完的任务标为失败并写明原因，
+  点「重试」即可把 `.part` 接管过来继续下
 - **登录 Cookie**：上传 `cookies.txt`，用于私享 / 会员 / 年龄受限内容
 - **文件与任务管理**：网页内下载、删除文件；已结束任务可单独删除或一键清理，任务记录最多保留 50 条
 
@@ -234,6 +236,7 @@ python -m unittest discover -s tests -v
 | `COOKIE_FILE` | `/config/cookies.txt` | Cookie 文件路径 |
 | `PROXY_FILE` | `/config/proxy.txt` | 代理地址文件路径（一行 URL，由界面写入） |
 | `HTTP_CHUNK_SIZE` | `512M` | 单块大小，支持 `512M` / `1024K` / 字节数；`0` = 不分块 |
+| `TASKS_DB` | `<COOKIE_FILE 所在目录>/tasks.db` | 任务记录库（SQLite）路径，默认与 Cookie 同卷 |
 
 对外端口通过 `-p 8080:8080` 映射，容器内固定监听 8080。
 
@@ -292,6 +295,7 @@ python -m unittest discover -s tests -v
 │   ├── main.py                   # FastAPI 入口 + 全部路由
 │   ├── downloader.py             # 任务调度、并发、进度、代理、Cookie
 │   ├── tasklog.py                # 日志收集、凭证脱敏与失败摘要
+│   ├── store.py                  # 任务记录持久化（SQLite）
 │   └── static/                   # 前端构建产物（vite 自动输出，勿手改）
 └── tests/
     ├── test_tasklog.py           # 日志脱敏与摘要
@@ -299,7 +303,8 @@ python -m unittest discover -s tests -v
     ├── test_resume_and_proxy.py  # 断点续传接管与代理地址规范化
     ├── test_formats.py           # 输出格式预设的完整性
     ├── test_chunk_size.py        # HTTP_CHUNK_SIZE 单位解析
-    └── test_progress.py          # 多流进度累计与后期处理阶段
+    ├── test_progress.py          # 多流进度累计与后期处理阶段
+    └── test_task_store.py        # 任务持久化与重启恢复
 ```
 
 ## 说明
