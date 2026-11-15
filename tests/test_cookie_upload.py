@@ -155,6 +155,23 @@ class MainRoutesTest(unittest.TestCase):
         self.assertEqual(self.client.delete("/api/tasks/nope").status_code, 404)
         self.assertEqual(self.client.post("/api/tasks/nope/cancel").status_code, 404)
 
+    def test_cancel_queued_task_route(self):
+        """排队任务必须能从 API 取消；状态迁移由 manager 在锁内完成。"""
+        from app.downloader import DownloadTask
+
+        task = DownloadTask("cancel-route", "https://example.com/v", "best")
+        with main.manager._lock:
+            main.manager.tasks[task.id] = task
+        try:
+            response = self.client.post(f"/api/tasks/{task.id}/cancel")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(task.status, "cancelled")
+        finally:
+            with main.manager._lock:
+                main.manager.tasks.pop(task.id, None)
+            if main.manager._store is not None:
+                main.manager._store.delete(task.id)
+
     def test_cookie_and_proxy_status_routes(self):
         cookie = self.client.get("/api/cookies/status")
         proxy = self.client.get("/api/proxy")
