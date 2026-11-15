@@ -7,6 +7,7 @@
 import sqlite3
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -157,6 +158,110 @@ class TaskStoreTest(unittest.TestCase):
         self.assertIsNotNone(mgr.get("x"), "删库失败时任务应继续留在列表里")
         self.assertFalse(store.available)
         self.assertEqual(TaskStore(self.db).load()[0]["id"], "x")
+
+    def test_remove_task_when_store_disabled_still_removes_memory(self):
+        """库已经降级时只删内存，否则任务会一直卡在列表里无法清理。"""
+        store = TaskStore(self.db)
+        store.save(_task("x", status="finished"))
+        mgr = DownloadManager(Path(self._tmp.name) / "dl", store=store)
+        with mgr._lock:
+            mgr.tasks["x"] = _task("x", status="finished")
+
+        store._disabled = True  # 模拟运行期已经降级
+        self.assertEqual(mgr.remove_task("x")["id"], "x")
+        self.assertIsNone(mgr.get("x"))
+
+    def test_remove_finished_when_store_disabled_still_removes_memory(self):
+        """清理已结束任务在降级模式下也不能变成永远清 0 条。"""
+        store = TaskStore(self.db)
+        store.save(_task("a", status="finished"))
+        store.save(_task("b", status="failed"))
+        mgr = DownloadManager(Path(self._tmp.name) / "dl", store=store)
+        store._disabled = True
+
+        self.assertEqual(mgr.remove_finished(), 2)
+        self.assertEqual(mgr.count(), 0)
+
+    def test_trim_keeps_memory_when_store_delete_fails(self):
+        """删库失败时不能先把内存任务删掉，否则 DB 行会在重启后复活。"""
+        mgr = DownloadManager(Path(self._tmp.name) / "dl", store=TaskStore(self.db))
+        with mgr._lock:
+            for i in range(MAX_TASKS):
+                mgr.tasks[f"t{i}"] = _task(f"t{i}", status="finished",
+                                            progress=float(i))
+            mgr.tasks = {  # 越早的排在最前，确保裁剪会先碰到 t0
+                key: value for key, value in mgr.tasks.items()
+            }
+            with mock.patch.object(mgr._store, "delete", return_value=False):
+                mgr._trim_tasks()
+
+        self.assertEqual(mgr.count(), MAX_TASKS)
+        self.assertIsNotNone(mgr.get("t0"))
+
+    def test_restore_keeps_failed_trim_rows_visible(self):
+        """启动裁剪删库失败时，未删掉的旧行应继续留在内存里，而不是凭空消失。"""
+        store = TaskStore(self.db)
+        for i in range(MAX_TASKS + 5):
+            t = _task(f"t{i}", progress=float(i))
+            t.created = 1000.0 + i
+            store.save(t)
+
+        with mock.patch.object(store, "delete", return_value=False):
+            mgr = DownloadManager(Path(self._tmp.name) / "dl", store=store)
+
+        self.assertEqual(mgr.count(), MAX_TASKS + 5)
+        self.assertIsNotNone(mgr.get("t0"))
+
+    def test_transient_database_lock_is_retried(self):
+        """database is locked 是临时错误，不应把本次运行的持久化永久关掉。"""
+        store = TaskStore(self.db)
+        original_connect = store._connect
+
+        with mock.patch.object(
+            store,
+            "_connect",
+            side_effect=[sqlite3.OperationalError("database is locked"), original_connect()],
+        ):
+            store.save(_task("retry"))
+
+        self.assertTrue(store.available)
+        self.assertEqual(TaskStore(self.db).load()[0]["id"], "retry")
+
+    def test_persist_during_remove_task_does_not_resurrect(self):
+        """覆盖“删库已提交、内存尚未删除”的中间窗口。
+
+        remove_task 删除 DB 行后会释放中间状态；后台线程若在这段时间 persist，
+        旧实现会重新 INSERT，导致任务从列表消失但重启后复活。
+        """
+        store = TaskStore(self.db)
+        mgr = DownloadManager(Path(self._tmp.name) / "dl", store=store)
+        task = _task("x", status="finished")
+        with mgr._lock:
+            mgr.tasks["x"] = task
+        mgr.persist(task)
+
+        entered = threading.Event()
+        release = threading.Event()
+        original_delete = store.delete
+
+        def delayed_delete(task_id):
+            ok = original_delete(task_id)
+            entered.set()
+            release.wait(5)
+            return ok
+
+        store.delete = delayed_delete
+        worker = threading.Thread(target=mgr.remove_task, args=("x",), daemon=True)
+        worker.start()
+        self.assertTrue(entered.wait(5), "remove_task 没有进入删库后的窗口")
+
+        # 这段就是竞态窗口：DB 行已删，内存记录还没删
+        mgr.persist(task)
+        release.set()
+        worker.join(5)
+
+        self.assertIsNone(mgr.get("x"))
+        self.assertEqual(TaskStore(self.db).load(), [])
 
     def test_hook_flushes_progress(self):
         store = TaskStore(self.db)
