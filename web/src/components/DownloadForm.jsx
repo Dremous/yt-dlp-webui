@@ -104,6 +104,7 @@ export default function DownloadForm({ formats, onSubmit }) {
               type="submit"
               disableRipple
               color="primary"
+              isDisabled={!format}
               isLoading={loading}
               spinner={<Spinner size="sm" color="current" />}
               startContent={
