@@ -1,5 +1,9 @@
 """镜像与 GitHub Actions 配置回归测试。"""
 
+import os
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -91,14 +95,94 @@ class DockerfileConfigTest(unittest.TestCase):
             "CACHE_REF=ghcr.io/${GITHUB_REPOSITORY,,}:${CACHE_TAG}", content
         )
 
+    def test_runtime_user_can_be_overridden_with_puid_pgid(self):
+        content = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("ENV PUID=10001", content)
+        self.assertIn("PGID=10001", content)
+        self.assertIn("groupadd -r -g 10001 app", content)
+        self.assertIn("-u 10001", content)
+
     def test_runtime_drops_privileges(self):
         dockerfile = (self.root / "Dockerfile").read_text(encoding="utf-8")
         entrypoint = (self.root / "docker-entrypoint.sh").read_text(encoding="utf-8")
         self.assertIn("gosu", dockerfile)
         self.assertIn("docker-entrypoint.sh", dockerfile)
         self.assertIn("ENTRYPOINT", dockerfile)
-        self.assertIn("exec gosu app", entrypoint)
-        self.assertIn("chown -R app:app /downloads /config", entrypoint)
+        self.assertIn('exec gosu "$PUID:$PGID"', entrypoint)
+        self.assertIn('chown -R "$PUID:$PGID" /downloads /config /home/app', entrypoint)
+
+    def test_entrypoint_applies_puid_pgid_to_mounts_and_process(self):
+        """用假 id/chown/gosu 验证 root 分支：按 PUID/PGID 改归属并降权。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            script = root / "docker-entrypoint.sh"
+            shutil.copy2(self.root / "docker-entrypoint.sh", script)
+            log = root / "calls.log"
+
+            commands = {
+                "id": '#!/bin/sh\n'
+                      'if [ "$1" = "-u" ]; then echo 0; exit 0; fi\n'
+                      'exec /usr/bin/id "$@"\n',
+                "chown": '#!/bin/sh\n'
+                         'printf "chown %s\\n" "$*" >> "$ENTRYPOINT_LOG"\n',
+                "gosu": '#!/bin/sh\n'
+                        'printf "gosu %s\\n" "$*" >> "$ENTRYPOINT_LOG"\n',
+            }
+            for name, body in commands.items():
+                path = bin_dir / name
+                path.write_text(body, encoding="utf-8")
+                path.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
+            env["ENTRYPOINT_LOG"] = str(log)
+            env["PUID"] = "1000"
+            env["PGID"] = "1000"
+
+            result = subprocess.run(
+                ["/bin/sh", str(script), "true"],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = log.read_text(encoding="utf-8")
+            self.assertIn("chown -R 1000:1000 /downloads /config /home/app", calls)
+            self.assertIn("gosu 1000:1000 true", calls)
+
+    def test_entrypoint_rejects_non_numeric_puid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            script = root / "docker-entrypoint.sh"
+            shutil.copy2(self.root / "docker-entrypoint.sh", script)
+            log = root / "calls.log"
+
+            (bin_dir / "id").write_text(
+                '#!/bin/sh\necho 0\n', encoding="utf-8"
+            )
+            (bin_dir / "id").chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
+            env["ENTRYPOINT_LOG"] = str(log)
+            env["PUID"] = "abc"
+            env["PGID"] = "1000"
+
+            result = subprocess.run(
+                ["/bin/sh", str(script), "true"],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("PUID", result.stderr)
+            self.assertFalse(log.exists(), "非法 UID 不应继续 chown/gosu")
 
     def test_workflow_uses_same_ref_for_cache_read_and_write(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(

@@ -48,13 +48,18 @@ ENV LOG_FILE=/config/webui.log
 # 容器监听端口；健康检查跟随同一变量，避免自定义 PORT 后探活仍打 8080
 ENV PORT=8080
 
+# 降权用户/组的默认值。运行时可用 -e PUID=1000 -e PGID=1000 覆盖，
+# 入口脚本会按新值修正挂载目录归属，再 gosu 到该 UID/GID。
+ENV PUID=10001 \
+    PGID=10001
+
 # ffmpeg：用于视频合并与音频转码（mp3 提取必需）；gosu：入口脚本降权用
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         gosu \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /app /downloads /config \
-    && groupadd -r app \
+    && groupadd -r -g 10001 app \
     && useradd -r -g app -u 10001 -d /home/app -m app
 
 # 降权后的进程需要可写的 HOME（Deno / yt-dlp 会在这里放缓存）
@@ -85,7 +90,7 @@ RUN pip install --no-cache-dir --upgrade yt-dlp-ejs \
 COPY app ./app
 COPY --from=web-builder /app/app/static ./app/static
 
-# 入口脚本：root 启动时先修正持久卷归属，再 gosu 到 app 用户执行 CMD。
+# 入口脚本：root 启动时先修正持久卷归属，再 gosu 到 PUID:PGID 执行 CMD。
 # 下载/配置文件由宿主机 bind mount 时，首次创建目录通常属于 root；
 # 没有这一步，非 root 进程会无法写入 ./downloads 和 ./config。
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
@@ -109,7 +114,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 # 卷：下载文件与配置（Cookie / 代理）持久化
 VOLUME /downloads /config
 
-# 入口脚本以 root 修正挂载目录归属后，立即用 gosu 降到 app 用户；
+# 入口脚本以 root 修正挂载目录归属后，立即用 gosu 降到 PUID:PGID；
 # 实际运行的 uvicorn 进程不是 root。日志由 app 内的 setup_logging 配置。
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python", "-m", "app.serve"]

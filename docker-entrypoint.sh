@@ -1,13 +1,30 @@
 #!/bin/sh
-# 容器默认以 root 启动，仅用于修正 bind mount 的归属，然后立刻降到 app 用户。
-# 这样首次创建 ./downloads、./config 时不会因为 root 拥有目录而导致下载失败。
+# 容器默认以 root 启动，仅用于修正 bind mount 的归属，然后立刻降到非 root 用户。
+# PUID/PGID 可在运行时覆盖（如 PUID=1000 PGID=1000），让容器内进程与宿主机
+# 用户保持一致，下载文件不会出现「宿主机用户改不动」的 root/10001 归属。
 set -eu
 
+PUID="${PUID:-10001}"
+PGID="${PGID:-10001}"
+
+is_valid_id() {
+    case "$1" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$1" -ge 1 ] && [ "$1" -le 2147483647 ]
+}
+
 if [ "$(id -u)" = "0" ]; then
-    if ! chown -R app:app /downloads /config 2>/dev/null; then
-        echo "[entrypoint] warning: 无法修改 /downloads 或 /config 的归属，请检查挂载目录权限" >&2
+    if ! is_valid_id "$PUID" || ! is_valid_id "$PGID"; then
+        echo "[entrypoint] error: PUID/PGID 必须是 1-2147483647 的整数（当前 PUID=${PUID} PGID=${PGID}）" >&2
+        exit 1
     fi
-    exec gosu app "$@"
+
+    # HOME 也要跟着改：Deno / yt-dlp 会在 $HOME 下写缓存。
+    if ! chown -R "$PUID:$PGID" /downloads /config /home/app 2>/dev/null; then
+        echo "[entrypoint] warning: 无法修改 /downloads、/config 或 /home/app 的归属，请检查挂载目录权限" >&2
+    fi
+    exec gosu "$PUID:$PGID" "$@"
 fi
 
 exec "$@"

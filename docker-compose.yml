@@ -23,6 +23,10 @@ services:
       - LOG_FILE=/config/webui.log
       # 容器内监听端口；与上面的 ports 映射使用同一个变量
       - PORT=${PORT:-8080}
+      # 运行用户/组的 UID/GID，默认 10001；设为宿主机用户（如 1000）可让
+      # ./downloads、./config 直接归你所有，避免宿主机改不动下载文件。
+      - PUID=${PUID:-10001}
+      - PGID=${PGID:-10001}
       # 自定义域名访问时添加，逗号分隔；私网 IP 和 localhost 已默认放行。
       - WEBUI_ALLOWED_HOSTS=${WEBUI_ALLOWED_HOSTS:-}
     # 让容器内可以用 host.docker.internal 指向宿主机（Linux 原生 Docker 必需，
