@@ -37,19 +37,11 @@ docker run -d --name yt-dlp-webui \
 
 打开 [http://localhost:8080](http://localhost:8080)，粘贴链接即可下载。
 
-如果更在意镜像体积，可以把最后的 `:latest` 换成 `:slim`。slim 使用 BtbN 的 GPL 静态 ffmpeg
-构建，CI 每次会解析其最新稳定的 nX.Y 分支，保留 MP4 合并、MP3 转码、PUID/PGID、TZ 与 YouTube EJS，
-镜像仍比 latest 小：
+镜像只有一个 `latest` 变体，内置 BtbN 的 GPL 静态 ffmpeg。CI 每次构建会解析其最新稳定的
+nX.Y 分支，并保留 MP4 合并、MP3 转码、PUID/PGID、TZ 与 YouTube EJS。需要固定某次构建时，
+可以改用日期标签（形如 `20261117-abc1234`，以实际构建输出为准）。
 
-```bash
-docker run -d --name yt-dlp-webui \
-  -p 8080:8080 \
-  -v "$PWD/downloads:/downloads" \
-  -v "$PWD/config:/config" \
-  --add-host=host.docker.internal:host-gateway \
-  --restart unless-stopped \
-  ghcr.io/dremous/yt-dlp-webui:slim
-```
+原先的 `slim` 标签已停止更新；原 slim 用户请改用 `latest` 或对应日期标签。
 
 容器默认时区为 `Asia/Shanghai`；需要其他时区时加 `-e TZ=Asia/Tokyo`（使用 IANA 时区名）。
 
