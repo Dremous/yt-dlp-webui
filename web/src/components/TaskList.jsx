@@ -238,9 +238,9 @@ function TaskItem({ task, onChanged, onDelete }) {
     }
   }
 
-    const canRetry = task.status === "failed" || task.status === "cancelled";
   // 排队任务也在等待并发位，必须能从界面取消；后端接口本来就支持 queued。
   const canCancel = task.status === "queued" || task.status === "downloading";
+  const canRetry = task.status === "failed" || task.status === "cancelled";
   const { Icon } = meta;
 
   return (
@@ -280,7 +280,7 @@ function TaskItem({ task, onChanged, onDelete }) {
 
       <div className="relative">
         <Progress
-          aria-label="下载进度"
+          aria-label={inPostprocess ? "后期处理进度" : "下载进度"}
           size="sm"
           value={task.progress}
           className="max-w-full"
@@ -303,11 +303,7 @@ function TaskItem({ task, onChanged, onDelete }) {
             <span className="tabular-nums text-slate-300">
               {Math.round(task.progress)}%
             </span>
-            {task.stage ? (
-              <span className="text-amber-300">{task.stage}</span>
-            ) : (
-              task.speed && <span>{task.speed}</span>
-            )}
+            {!task.stage && task.speed && <span>{task.speed}</span>}
             {!task.stage && task.eta && <span>剩余 {task.eta}</span>}
           </>
         )}
