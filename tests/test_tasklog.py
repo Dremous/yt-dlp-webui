@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.tasklog import TaskLogger
+from app.tasklog import TaskLogger, redact
 
 
 class RedactionTest(unittest.TestCase):
@@ -65,6 +65,13 @@ class RedactionTest(unittest.TestCase):
 
         self.assertEqual(logger.redacted_lines()[0], "https://www.youtube.com/watch?v=abc")
 
+    def test_public_redact_is_reusable_outside_logger(self):
+        """代理 API、异常摘要等模块应能复用同一个脱敏函数。"""
+        self.assertEqual(
+            redact("proxy http://user:secret@127.0.0.1:7890 failed"),
+            "proxy http://***@127.0.0.1:7890 failed",
+        )
+
     def test_redacts_before_truncating(self):
         """超长行必须先脱敏再截断，否则截断会留下密码片段。
 
@@ -104,7 +111,7 @@ class BufferTest(unittest.TestCase):
 
 
 class MultilineMessageTest(unittest.TestCase):
-    """yt-dlp 会把 ERROR 行和整段 traceback 塞进同一条 logger 消息（含多个 \\n）。
+    """yt-dlp 会把 ERROR 行和整段 traceback 塞进同一条 logger 消息（含多个 \n）。
 
     如果不拆，缓冲里的"一行"其实是好几行，会同时破坏两件事：
     - error 摘要被 traceback 路径挤占，前端那一行几乎全是噪音

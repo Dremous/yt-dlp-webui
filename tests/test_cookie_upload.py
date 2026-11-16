@@ -1,6 +1,7 @@
 """Cookie 上传与 app.main 路由层测试。"""
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -31,6 +32,8 @@ os.environ["COOKIE_FILE"] = str(_TMP / "config" / "cookies.txt")
 os.environ["PROXY_FILE"] = str(_TMP / "config" / "proxy.txt")
 os.environ["TASKS_DB"] = str(_TMP / "config" / "tasks.db")
 os.environ["LOG_FILE"] = "none"
+# TestClient 默认 Host 是 testserver；显式放行，避免中间件把它当成未知域名。
+os.environ["WEBUI_ALLOWED_HOSTS"] = "testserver"
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -90,7 +93,7 @@ class CookieUploadTest(unittest.TestCase):
         self.assertLessEqual(fake.bytes_read, LIMIT + 1, "最多只应多读 1 字节用于判超限")
 
     def test_route_rejects_oversized_cookie_before_reading(self):
-        client = TestClient(main.app)
+        client = TestClient(main.app, headers={"X-WebUI-Request": "1"})
         with mock.patch.object(
             main.UploadFile,
             "read",
@@ -110,7 +113,11 @@ class MainRoutesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # 500 也当普通响应返回，symlink 根目录这类回归才能断言状态码而不是抛异常
-        cls.client = TestClient(main.app, raise_server_exceptions=False)
+        cls.client = TestClient(
+            main.app,
+            raise_server_exceptions=False,
+            headers={"X-WebUI-Request": "1"},
+        )
 
     def _set_download_dir(self, root):
         old = main.DOWNLOAD_DIR
@@ -179,6 +186,56 @@ class MainRoutesTest(unittest.TestCase):
         self.assertEqual(proxy.status_code, 200)
         self.assertFalse(cookie.json()["active"])
         self.assertFalse(proxy.json()["active"])
+        self.assertFalse(proxy.json()["has_credentials"])
+
+    def test_mutation_requires_x_webui_request_header(self):
+        client = TestClient(main.app, raise_server_exceptions=False)
+        response = client.post("/api/tasks/cleanup")
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("X-WebUI-Request", response.json()["detail"])
+
+    def test_unknown_host_is_rejected(self):
+        client = TestClient(
+            main.app,
+            base_url="http://evil.example",
+            raise_server_exceptions=False,
+            headers={"X-WebUI-Request": "1"},
+        )
+        response = client.get("/api/formats")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "Host not allowed")
+
+    def test_private_lan_host_is_allowed(self):
+        client = TestClient(
+            main.app,
+            base_url="http://192.168.1.10:8080",
+            raise_server_exceptions=False,
+        )
+        response = client.get("/api/formats")
+        self.assertEqual(response.status_code, 200)
+
+    def test_proxy_api_never_returns_credentials(self):
+        old_proxy = main.manager.proxy
+        try:
+            response = self.client.put(
+                "/api/proxy",
+                json={"url": "http://user:secret@127.0.0.1:7890"},
+            )
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertNotIn("secret", json.dumps(data))
+            self.assertTrue(data["has_credentials"])
+            self.assertEqual(data["url"], "http://***@127.0.0.1:7890")
+
+            status = self.client.get("/api/proxy").json()
+            self.assertNotIn("secret", json.dumps(status))
+            self.assertEqual(status["url"], "http://***@127.0.0.1:7890")
+            self.assertTrue(status["has_credentials"])
+        finally:
+            if old_proxy:
+                main.manager.save_proxy(old_proxy)
+            else:
+                main.manager.remove_proxy()
 
     def test_files_route_accepts_symlinked_download_root(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -213,6 +270,27 @@ class MainRoutesTest(unittest.TestCase):
             response = self.client.delete("/api/files/nope.mp4")
 
         self.assertEqual(response.status_code, 404)
+
+    def test_delete_file_does_not_leak_os_error_detail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "boom.mp4").write_bytes(b"x")
+            self._set_download_dir(root)
+            with mock.patch.object(
+                Path, "unlink", side_effect=OSError("disk full: /secret/server/path")
+            ):
+                response = self.client.delete("/api/files/boom.mp4")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("服务端日志", response.json()["detail"])
+        self.assertNotIn("/secret/server/path", response.json()["detail"])
+
+    def test_proxy_error_hint_redacts_credentials(self):
+        message = main._humanize_proxy_error(
+            RuntimeError("proxy socks5h://user:secret@127.0.0.1:7890 failed")
+        )
+        self.assertNotIn("secret", message)
+        self.assertIn("socks5h://***@127.0.0.1:7890", message)
 
 
 if __name__ == "__main__":
