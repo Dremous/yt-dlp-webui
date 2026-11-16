@@ -11,10 +11,33 @@ if "yt_dlp" not in sys.modules:
     _stub.YoutubeDL = object
     sys.modules["yt_dlp"] = _stub
 
-from app.downloader import DownloadManager, DownloadTask, normalize_proxy
+from app.downloader import DownloadManager, DownloadTask, mask_proxy_url, normalize_proxy
 
 
 class ProxyNormalizeExtraTest(unittest.TestCase):
+    def test_mask_proxy_url_hides_userinfo(self):
+        display, has_credentials = mask_proxy_url(
+            "socks5h://user:secret@192.168.0.30:7893"
+        )
+        self.assertEqual(display, "socks5h://***@192.168.0.30:7893")
+        self.assertTrue(has_credentials)
+        self.assertNotIn("user", display)
+        self.assertNotIn("secret", display)
+
+    def test_mask_proxy_url_keeps_credential_free_address(self):
+        display, has_credentials = mask_proxy_url("http://192.168.0.30:7890")
+        self.assertEqual(display, "http://192.168.0.30:7890")
+        self.assertFalse(has_credentials)
+
+    def test_proxy_status_returns_masked_address_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = DownloadManager(Path(tmp), proxy_file=str(Path(tmp) / "proxy.txt"))
+            manager.save_proxy("http://user:secret@127.0.0.1:7890")
+            status = manager.proxy_status()
+            self.assertEqual(status["url"], "http://***@127.0.0.1:7890")
+            self.assertTrue(status["has_credentials"])
+            self.assertNotIn("secret", str(status))
+
     def test_socks5h_kept_as_is(self):
         self.assertEqual(
             normalize_proxy("socks5h://192.168.0.30:7893"),

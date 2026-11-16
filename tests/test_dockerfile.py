@@ -33,6 +33,12 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertIn("${PORT:-8080}:${PORT:-8080}", content)
         self.assertIn("PORT=${PORT:-8080}", content)
 
+    def test_compose_bind_addr_can_limit_listening_interface(self):
+        content = (self.root / "docker-compose.yml").read_text(encoding="utf-8")
+        # 默认保留 0.0.0.0 以不破坏现有 LAN 访问；BIND_ADDR 可收紧到具体网卡/IP。
+        self.assertIn("BIND_ADDR", content)
+        self.assertIn("${BIND_ADDR:-0.0.0.0}", content)
+
     def test_image_does_not_hardcode_expose_port(self):
         """EXPOSE 是静态元数据，写死 8080 会和运行时 PORT 不一致。"""
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
@@ -73,10 +79,26 @@ class DockerfileConfigTest(unittest.TestCase):
             encoding="utf-8"
         )
         # main 与 tag 不能共用同一个 cache tag，否则会互相覆盖。
-        self.assertIn("buildcache-${GITHUB_REF_TYPE}-${GITHUB_REF_NAME", content)
+        self.assertIn("SAFE_REF=", content)
+        self.assertIn("REF_HASH=", content)
+        self.assertIn("tr -cs", content)
+        self.assertIn("sha256sum", content)
+        self.assertIn(
+            'CACHE_TAG="buildcache-${GITHUB_REF_TYPE}-${SAFE_REF}-${REF_HASH}"',
+            content,
+        )
         self.assertIn(
             "CACHE_REF=ghcr.io/${GITHUB_REPOSITORY,,}:${CACHE_TAG}", content
         )
+
+    def test_runtime_drops_privileges(self):
+        dockerfile = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        entrypoint = (self.root / "docker-entrypoint.sh").read_text(encoding="utf-8")
+        self.assertIn("gosu", dockerfile)
+        self.assertIn("docker-entrypoint.sh", dockerfile)
+        self.assertIn("ENTRYPOINT", dockerfile)
+        self.assertIn("exec gosu app", entrypoint)
+        self.assertIn("chown -R app:app /downloads /config", entrypoint)
 
     def test_workflow_uses_same_ref_for_cache_read_and_write(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(

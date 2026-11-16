@@ -19,6 +19,7 @@ if "yt_dlp" not in sys.modules:
     sys.modules["yt_dlp"] = _stub
 
 from app.downloader import DownloadManager, DownloadTask
+from app.tasklog import TaskLogger
 
 
 class ProgressHookTest(unittest.TestCase):
@@ -51,6 +52,18 @@ class ProgressHookTest(unittest.TestCase):
         self.mgr._hook({"status": "downloading", "downloaded_bytes": 100,
                         "total_bytes": 200, "info_dict": info}, self.task)
         self.assertAlmostEqual(self.task.progress, 90.0, places=1)
+
+    def test_failure_summary_redacts_exception_fallback(self):
+        """没有 yt-dlp 日志时，异常文本也不能把代理密码带到前端。"""
+        task = DownloadTask("t-fail", "https://example.com/v", "best")
+        summary = self.mgr._report_failure(
+            task,
+            Path(self._tmp.name) / task.id,
+            TaskLogger(),
+            RuntimeError("socks5h://user:secret@127.0.0.1:7890 failed"),
+        )
+        self.assertNotIn("secret", summary)
+        self.assertIn("socks5h://***@127.0.0.1:7890", summary)
 
     def test_unknown_sizes_fall_back_to_per_stream(self):
         info = {"requested_formats": [{}, {}]}
