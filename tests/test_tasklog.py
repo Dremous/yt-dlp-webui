@@ -111,7 +111,7 @@ class BufferTest(unittest.TestCase):
 
 
 class MultilineMessageTest(unittest.TestCase):
-    """yt-dlp 会把 ERROR 行和整段 traceback 塞进同一条 logger 消息（含多个 \n）。
+    """yt-dlp 会把 ERROR 行和整段 traceback 塞进同一条 logger 消息（含多个 \\n）。
 
     如果不拆，缓冲里的"一行"其实是好几行，会同时破坏两件事：
     - error 摘要被 traceback 路径挤占，前端那一行几乎全是噪音
