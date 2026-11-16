@@ -264,6 +264,10 @@ class DownloadTask:
         self.filename: Optional[str] = None  # 相对下载目录的路径（含任务子目录前缀）
         self.error: Optional[str] = None
         self.created: float = time.time()
+        # 多流任务（视频轨 + 音频轨）的运行时进度；只用于展示，不写入 SQLite。
+        # kind: video / audio / combined；combined 表示站点只给了一条合流。
+        self.streams: Dict[str, dict] = {}
+        self.current_stream: Optional[str] = None
         # 多流（视频轨 + 音频轨）是分两次下载的：已下完的流字节数累计在这里，
         # 作为跨流进度的分子；总大小只从 requested_formats 求一次，免得每帧重算
         self._stream_done: float = 0.0
@@ -285,6 +289,12 @@ class DownloadTask:
             "filename": self.filename,
             "error": self.error,
             "created": self.created,
+            "current_stream": self.current_stream,
+            "streams": [
+                dict(self.streams[kind])
+                for kind in ("video", "audio", "combined")
+                if kind in self.streams
+            ],
         }
 
 
@@ -688,6 +698,7 @@ class DownloadManager:
             task.stage = None
             task.speed = None
             task.eta = None
+            task.current_stream = None
         self.persist(task)
         return True
 
@@ -704,6 +715,7 @@ class DownloadManager:
             task.stage = None
             task.speed = None
             task.eta = None
+            task.current_stream = None
         self.persist(task)
         return True
 
@@ -717,6 +729,7 @@ class DownloadManager:
             task.speed = None
             task.eta = None
             task.progress = 0.0
+            task.current_stream = None
             task.error = error
         self.persist(task)
         return True
@@ -731,6 +744,7 @@ class DownloadManager:
             task.speed = None
             task.eta = None
             task.progress = 0.0
+            task.current_stream = None
         self.persist(task)
         shutil.rmtree(task_dir, ignore_errors=True)
 
@@ -961,6 +975,71 @@ class DownloadManager:
         summary = redact(task_logger.error_summary() or str(exc))[:400]
         return f"{summary}｜完整日志：{log_rel}" if log_rel else summary
 
+    # ------------------------------------------------------------------
+    # 多流轨道状态
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _stream_kind(info: dict) -> tuple:
+        """从当前流的 vcodec / acodec 判断它是视频轨、音频轨还是合流。
+
+        yt-dlp 给 `bestvideo+bestaudio` 会分两次调用下载器，每次 progress_hook
+        的 info_dict 只描述当前这一条流。`none` 是 yt-dlp 表示“该字段不存在”的
+        惯用值，不能当成有效编码。
+        """
+        if not isinstance(info, dict):
+            return "combined", "单文件"
+        vcodec = str(info.get("vcodec") or "").strip().lower()
+        acodec = str(info.get("acodec") or "").strip().lower()
+        has_video = bool(vcodec) and vcodec != "none"
+        has_audio = bool(acodec) and acodec != "none"
+        if has_video and not has_audio:
+            return "video", "视频轨"
+        if has_audio and not has_video:
+            return "audio", "音频轨"
+        return "combined", "单文件"
+
+    @staticmethod
+    def _track_state(task: DownloadTask, kind: str, label: str) -> dict:
+        """取出或创建一条轨的运行时状态。"""
+        entry = task.streams.get(kind)
+        if entry is None:
+            entry = {
+                "kind": kind,
+                "label": label,
+                "progress": 0.0,
+                "status": "pending",
+                "speed": None,
+                "eta": None,
+            }
+            task.streams[kind] = entry
+        else:
+            entry["label"] = label
+        return entry
+
+    def _seed_streams(self, task: DownloadTask, info: dict) -> None:
+        """如果 info_dict 带 requested_formats，先把两条轨建成 pending。
+
+        这样视频轨还在下载时，界面就能先看到“音频轨等待中”，而不是等音频
+        真正开始才有第二条状态。
+        """
+        fmts = info.get("requested_formats") if isinstance(info, dict) else None
+        if not isinstance(fmts, list):
+            return
+        for fmt in fmts:
+            if not isinstance(fmt, dict):
+                continue
+            kind, label = self._stream_kind(fmt)
+            self._track_state(task, kind, label)
+
+    @staticmethod
+    def _stream_progress(data: dict) -> float:
+        """当前一条流的百分比；没有总大小时返回 0，不拿全局进度冒充单轨进度。"""
+        downloaded = float(data.get("downloaded_bytes") or 0)
+        total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
+        if not total:
+            return 0.0
+        return min(downloaded / float(total) * 100.0, 100.0)
+
     def _hook(self, data: dict, task: DownloadTask) -> None:
         # 取消信号：一旦任务被标记为取消，立即终止 yt-dlp 下载。
         # 状态由 cancel() 在锁内写入，这里统一走 _is_cancelled()，避免跨线程裸读。
@@ -968,12 +1047,26 @@ class DownloadManager:
             raise DownloadCancelled()
         # progress / postprocessor 回调结构不同，用 .get 防御缺键
         status = data.get("status")
+        info = data.get("info_dict") or {}
+        self._seed_streams(task, info)
         if status == "downloading":
             done, total = self._progress_totals(data, task)
             if total:
                 task.progress = min(done / total * 100.0, 100.0)
-            task.speed = data.get("_speed_str") or data.get("speed_str")
-            task.eta = data.get("_eta_str") or data.get("eta_str")
+            speed = data.get("_speed_str") or data.get("speed_str")
+            eta = data.get("_eta_str") or data.get("eta_str")
+            task.speed = speed
+            task.eta = eta
+
+            # 当前流单独记账，前端才能显示“视频轨 xx% / 音频轨 xx%”
+            kind, label = self._stream_kind(info)
+            track = self._track_state(task, kind, label)
+            track["progress"] = round(self._stream_progress(data), 1)
+            track["status"] = "downloading"
+            track["speed"] = speed
+            track["eta"] = eta
+            task.current_stream = kind
+
             # 每 1% 落一次盘：重启后至少能恢复到最近的整数进度，又不至于每帧写库
             if task.progress - task._persisted_progress >= 1.0:
                 task._persisted_progress = task.progress
@@ -982,10 +1075,23 @@ class DownloadManager:
             # 有两类 finished：某一路流下载完成（带 downloaded_bytes），
             # 以及后期处理结束（不带）。前者要把字节数记账，后者只是清阶段提示
             if data.get("downloaded_bytes") is not None:
+                kind, label = self._stream_kind(info)
+                # 有些站点/版本在 finished 回调里只给简化 info_dict；此时用
+                # 当前正在下的那条轨兜底，避免把已完成的视频轨记成合流。
+                if kind == "combined" and task.current_stream in ("video", "audio"):
+                    kind = task.current_stream
+                    label = "视频轨" if kind == "video" else "音频轨"
+                track = self._track_state(task, kind, label)
+                track["progress"] = 100.0
+                track["status"] = "finished"
+                track["speed"] = None
+                track["eta"] = None
+                task.current_stream = None
                 task._stream_done += float(data["downloaded_bytes"] or 0)
                 task.stage = None
             else:
                 task.stage = None
+                task.current_stream = None
             task.speed = None
             task.eta = None
             self.persist(task)
@@ -996,9 +1102,11 @@ class DownloadManager:
             task.stage = POSTPROCESSOR_STAGE_LABELS.get(
                 postprocessor, POSTPROCESSOR_STAGE_FALLBACK
             )
+            task.current_stream = None
             task.speed = None
             task.eta = None
             self.persist(task)
+
 
     @staticmethod
     def _progress_totals(data: dict, task: DownloadTask) -> tuple:

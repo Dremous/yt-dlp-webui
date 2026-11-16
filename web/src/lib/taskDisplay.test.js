@@ -42,3 +42,40 @@ test("已结束任务即使残留 stage 也不显示后期处理状态", () => {
   assert.equal(display.color, "success");
   assert.equal(display.ariaLabel, "下载进度");
 });
+
+test("多流任务在下载中标出当前音频轨", () => {
+  const display = getTaskDisplay(
+    {
+      status: "downloading",
+      stage: null,
+      current_stream: "audio",
+      streams: [
+        { kind: "video", label: "视频轨", status: "finished", progress: 100 },
+        { kind: "audio", label: "音频轨", status: "downloading", progress: 26 },
+      ],
+    },
+    downloadingMeta
+  );
+
+  assert.equal(display.label, "下载中 · 音频轨");
+  assert.equal(display.streamLabel, "音频轨");
+  assert.equal(display.ariaLabel, "下载进度（音频轨）");
+});
+
+test("单流任务不额外标注轨道", () => {
+  const display = getTaskDisplay(
+    {
+      status: "downloading",
+      stage: null,
+      current_stream: "combined",
+      streams: [
+        { kind: "combined", label: "单文件", status: "downloading", progress: 42 },
+      ],
+    },
+    downloadingMeta
+  );
+
+  assert.equal(display.label, "下载中");
+  assert.equal(display.streamLabel, null);
+  assert.equal(display.ariaLabel, "下载进度");
+});

@@ -227,6 +227,15 @@ function TaskItem({ task, onChanged, onDelete }) {
   const motionSafe = useMotionSafe();
   const title = task.title ? ` · ${task.title}` : "";
   const isEnded = ENDED_STATES.includes(task.status);
+  // 两轨各自的状态只在下载阶段显示；合并/转码阶段让位给 stage，避免和
+  // “合并中”叠在一起。单流任务（streams.length <= 1）保持原有外观。
+  const tracks =
+    task.status === "downloading" &&
+    !task.stage &&
+    Array.isArray(task.streams) &&
+    task.streams.length > 1
+      ? task.streams
+      : [];
 
   async function handleCancel() {
     try {
@@ -306,6 +315,32 @@ function TaskItem({ task, onChanged, onDelete }) {
           </span>
         )}
       </div>
+
+      {tracks.length > 0 && (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {tracks.map((track) => {
+            const done = track.status === "finished";
+            const value = done ? 100 : Number(track.progress) || 0;
+            return (
+              <div key={track.kind} className="flex flex-col gap-1">
+                <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+                  <span>{track.label}</span>
+                  <span className={done ? "text-emerald-400" : "text-slate-300"}>
+                    {done ? "已完成" : `${Math.round(value)}%`}
+                  </span>
+                </div>
+                <Progress
+                  aria-label={`${track.label}进度`}
+                  size="sm"
+                  value={value}
+                  color={done ? "success" : track.status === "downloading" ? "primary" : "default"}
+                  className="max-w-full"
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div className="flex items-center gap-4 text-xs text-slate-400">
         {task.status === "downloading" && (
