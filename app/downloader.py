@@ -360,16 +360,18 @@ class DownloadManager:
         if self.proxy_file is None:
             raise ValueError("未配置 PROXY_FILE，无法保存代理")
         proxy = normalize_proxy(url)  # 非法地址在落盘前就拒绝
-        self._atomic_write(self.proxy_file, proxy + "\n", binary=False)
+        # 写文件与更新内存必须在同一临界区：否则两个并发保存可能一个写盘
+        # 成功、另一个更新内存成功，重启后代理会从当前值“变”成另一个值。
         with self._lock:
+            self._atomic_write(self.proxy_file, proxy + "\n", binary=False)
             self._proxy = proxy  # 立即对后续任务生效，无需重启容器
         return proxy
 
     def remove_proxy(self) -> None:
         """删除已保存的代理配置并恢复直连。"""
-        if self.proxy_file is not None and self.proxy_file.exists():
-            self.proxy_file.unlink()
         with self._lock:
+            if self.proxy_file is not None and self.proxy_file.exists():
+                self.proxy_file.unlink()
             self._proxy = None
 
     def _load_proxy(self) -> None:
@@ -524,8 +526,13 @@ class DownloadManager:
     # 任务删除（只处理已结束的任务，避免与后台线程争抢同一目录）
     # ------------------------------------------------------------------
     def _delete_record(self, task_id: str) -> bool:
-        """删除 SQLite 行；store 未配置或已降级时视为“无需删库”。"""
-        if self._store is None or not self._store.available:
+        """删除 SQLite 行；store 未配置时视为无需删库。
+
+        降级模式下 TaskStore.delete 会写删除墓碑，因此这里不能因为
+        store.available 为 False 就直接返回 True：那会只删内存、留下 DB 行，
+        重启后任务又复活。墓碑也写不进去时才返回 False。
+        """
+        if self._store is None:
             return True
         return self._store.delete(task_id)
 
@@ -547,11 +554,10 @@ class DownloadManager:
             self._deleting.add(task_id)
 
         try:
-            # 先删库、再删内存：删库失败时任务仍留在列表里，不会出现「界面已删、
-            # 重启后又复活」的状态；TaskStore.delete 失败会返回 False。
-            if self._store is not None and self._store.available:
-                if not self._store.delete(task_id):
-                    raise ValueError("任务库当前不可用，任务未删除，请稍后重试")
+            # 先删库/写墓碑、再删内存：两者都失败时任务仍留在列表里，不会出现
+            # 「界面已删、重启后又复活」的状态；TaskStore.delete 失败返回 False。
+            if self._store is not None and not self._store.delete(task_id):
+                raise ValueError("任务库当前不可用，任务未删除，请稍后重试")
 
             with self._lock:
                 if self.tasks.get(task_id) is task:
@@ -582,12 +588,12 @@ class DownloadManager:
 
         removed = []
         try:
-            if self._store is None or not self._store.available:
+            if self._store is None:
                 removed = ended
             else:
                 for tid, status in ended:
                     if not self._store.delete(tid):
-                        break  # 库不可用：已经删掉的部分保留，其余任务留在列表里
+                        break  # 库和墓碑都不可用：已经删掉的部分保留，其余留在列表里
                     removed.append((tid, status))
 
             with self._lock:
