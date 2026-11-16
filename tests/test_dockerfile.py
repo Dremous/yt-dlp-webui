@@ -171,10 +171,12 @@ class DockerfileConfigTest(unittest.TestCase):
 
     def test_dockerfile_includes_ffmpeg_source_offer(self):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
-        # GPL 二进制需要保留对应源码/构建脚本的提供方式。
+        # GPL 二进制需要保留对应源码/构建脚本的提供方式；源码地址必须
+        # 由 version.txt 中的 git commit 生成，不能指向不对应的 release 包。
         self.assertIn("SOURCE.txt", content)
-        self.assertIn("ffmpeg.org/releases", content)
+        self.assertIn("FFmpeg/FFmpeg/tree/${COMMIT}", content)
         self.assertIn("BtbN/FFmpeg-Builds", content)
+        self.assertNotIn("ffmpeg.org/releases", content)
 
     def test_workflow_resolves_latest_stable_btbn_gpl_build(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
@@ -183,25 +185,28 @@ class DockerfileConfigTest(unittest.TestCase):
         # 每次构建解析 BtbN latest release 中最高版本的 nX.Y 稳定 GPL 资产，
         # 并通过 build-arg 覆盖 Dockerfile 的本地 fallback。
         self.assertIn("Resolve latest stable BtbN FFmpeg GPL build", content)
-        self.assertIn("BtbN/FFmpeg-Builds/releases/latest", content)
+        self.assertIn("python3 .github/scripts/resolve_btbn_release.py", content)
         self.assertIn("steps.ffmpeg.outputs.version", content)
         self.assertIn(
             "FFMPEG_BUILDS_VERSION=${{ steps.ffmpeg.outputs.version }}", content
         )
         self.assertIn("FFMPEG_BUILDS_REFRESH=${{ github.run_id }}", content)
-        self.assertIn("sort -V", content)
         self.assertNotIn("FALLBACK", content)
 
     def test_workflow_fails_when_btbn_release_resolution_fails(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"
         )
+        resolver = (self.root / ".github/scripts/resolve_btbn_release.py").read_text(
+            encoding="utf-8"
+        )
         # CI 发布 latest 是浮动标签，解析失败必须失败，不能静默回退旧版本。
-        self.assertIn("GitHub API 不可用", content)
-        self.assertIn("BtbN latest release 中没有", content)
-        self.assertIn("BtbN 缺少资产", content)
-        self.assertIn("exit 1", content)
-        self.assertNotIn('VERSION="$FALLBACK"', content)
+        self.assertIn("resolve_btbn_release.py", content)
+        self.assertIn("GitHub API 不可用", resolver)
+        self.assertIn("BtbN latest release 中没有", resolver)
+        self.assertIn("BtbN 缺少资产", resolver)
+        self.assertIn("ResolutionError", resolver)
+        self.assertNotIn('VERSION="$FALLBACK"', resolver)
 
     def test_workflow_cache_ref_is_isolated_by_ref(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
@@ -266,6 +271,25 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertIn("Set up QEMU", smoke)
         self.assertIn("linux/amd64", smoke)
         self.assertIn("linux/arm64", smoke)
+
+    def test_workflow_smoke_checks_gpl_compliance_files(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        smoke = content.split("smoke:", 1)[1]
+        self.assertIn("Verify GPL compliance files", smoke)
+        self.assertIn("/usr/share/doc/ffmpeg/LICENSE", smoke)
+        self.assertIn("/usr/share/doc/ffmpeg/SOURCE.txt", smoke)
+        self.assertIn("/usr/share/doc/ffmpeg/version.txt", smoke)
+
+    def test_workflow_checksum_comment_is_accuracy_limited(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        # GitHub digest 与 asset 同源，只能说明下载内容与 release 元数据一致，
+        # 不能承诺防供应链替换。
+        self.assertIn("完整性校验", content)
+        self.assertNotIn("避免下载到损坏/被替换", content)
 
     def test_runtime_user_can_be_overridden_with_puid_pgid(self):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
@@ -458,17 +482,25 @@ class DockerfileConfigTest(unittest.TestCase):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"
         )
+        cache_script = (
+            self.root / ".github/scripts/verify_registry_cache.sh"
+        ).read_text(encoding="utf-8")
         # ignore-error 会吞掉 cache-to 失败；单独 verify，避免静默丢缓存。
         self.assertIn("name: Verify registry cache", content)
-        self.assertIn("docker buildx imagetools inspect", content)
+        self.assertIn("verify_registry_cache.sh", content)
+        self.assertIn("docker buildx imagetools inspect", cache_script)
 
     def test_workflow_cache_verification_is_non_blocking(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"
         )
+        cache_script = (
+            self.root / ".github/scripts/verify_registry_cache.sh"
+        ).read_text(encoding="utf-8")
         # 镜像已推送后，缓存导出失败只应告警，不应把发布 job 变红并跳过 smoke。
-        self.assertIn("::warning::registry cache", content)
-        self.assertIn("if docker buildx imagetools inspect", content)
+        self.assertIn("verify_registry_cache.sh", content)
+        self.assertIn("::warning::registry cache", cache_script)
+        self.assertIn("if docker buildx imagetools inspect", cache_script)
 
     def test_workflow_does_not_cancel_in_progress_build(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
@@ -489,7 +521,16 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertNotIn("abc1234", operations)
         self.assertNotIn("abc1234", quickstart)
         self.assertNotIn("abc1234", readme)
-        self.assertIn("20261116-6b315b5", quickstart)
+        # 日期标签是构建示例，不应把某一次的短 SHA 写死成唯一合法值。
+        self.assertRegex(quickstart, r"20\d{6}-[0-9a-f]{7,40}")
+        self.assertIn("日期标签用于定位", quickstart)
+        self.assertIn("digest", quickstart)
+
+    def test_docs_describe_current_ffmpeg_version_dynamically(self):
+        operations = (self.root / "docs/operations.md").read_text(encoding="utf-8")
+        # 不在文档里写死某次 BtbN 的 build number，避免上游更新后过期。
+        self.assertNotIn("n9.0.2-57-g", operations)
+        self.assertIn("version.txt", operations)
 
     def test_docs_describe_cache_invalidation(self):
         operations = (self.root / "docs/operations.md").read_text(encoding="utf-8")
