@@ -21,7 +21,7 @@
 | PUT | `/api/proxy` | 保存代理，body: `{"url": "http://host.docker.internal:7890"}`；响应同样只返回脱敏地址 |
 | DELETE | `/api/proxy` | 清除代理，恢复直连 |
 | POST | `/api/proxy/test` | 测试代理能否连通 YouTube（body 可传 `{"url": "..."}` 测未保存的地址） |
-| GET | `/api/about` | 应用信息（版本 / yt-dlp 版本 / 作者） |
+| GET | `/api/about` | 应用信息（应用版本 / ffmpeg 版本 / yt-dlp 版本 / 作者） |
 
 所有 `POST` / `PUT` / `PATCH` / `DELETE` 请求必须带 `X-WebUI-Request: 1`（Web 前端会自动携带）。
 这是低成本 CSRF 防护：跨站表单/脚本无法设置该自定义头，浏览器会先发 CORS 预检，而本服务不开放 CORS。

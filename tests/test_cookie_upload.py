@@ -138,6 +138,30 @@ class MainRoutesTest(unittest.TestCase):
         self.assertEqual(data["name"], "yt-dlp WebUI")
         self.assertEqual(data["author"], "Dremous")
         self.assertIn("version", data)
+        self.assertIn("ffmpeg_version", data)
+        self.assertIsInstance(data["ffmpeg_version"], str)
+
+    def test_about_route_reports_ffmpeg_build_version(self):
+        with mock.patch.object(main, "_ffmpeg_version", return_value="n9.0.2-test"):
+            response = self.client.get("/api/about")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["ffmpeg_version"], "n9.0.2-test")
+
+    def test_parse_ffmpeg_version_returns_build_id(self):
+        output = (
+            "ffmpeg version n9.0.2-57-gd838f9f9ae-20261115 Copyright (c) 2000-2026 "
+            "the FFmpeg developers\n"
+            "built with gcc 16.2.0\n"
+        )
+        self.assertEqual(
+            main.parse_ffmpeg_version(output),
+            "n9.0.2-57-gd838f9f9ae-20261115",
+        )
+        self.assertEqual(main.parse_ffmpeg_version("not ffmpeg output"), "不可用")
+
+    def test_ffmpeg_version_is_unavailable_when_binary_is_missing(self):
+        with mock.patch.object(main.subprocess, "run", side_effect=FileNotFoundError):
+            self.assertEqual(main._ffmpeg_version(), "不可用")
 
     def test_tasks_route_shape(self):
         response = self.client.get("/api/tasks")

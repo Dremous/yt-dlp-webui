@@ -67,6 +67,9 @@ export default function AboutButton({ about }) {
                 {about ? (
                   <div className="flex flex-col">
                     <InfoRow label="版本">{about.version}</InfoRow>
+                    <InfoRow label="ffmpeg 版本">
+                      {about.ffmpeg_version || "不可用"}
+                    </InfoRow>
                     <InfoRow label="yt-dlp 版本">{about.yt_dlp_version}</InfoRow>
                     <InfoRow label="作者">{about.author}</InfoRow>
                   </div>
