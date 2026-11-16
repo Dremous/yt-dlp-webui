@@ -23,8 +23,12 @@ from typing import Deque, List, Optional
 _USERINFO_RE = re.compile(r"(://)[^/\s?#]*@")
 
 
-def _redact(text: str) -> str:
-    """把 URL 里的凭证替换成 ***，保留协议与主机，方便排查代理是否配置正确。"""
+def redact(text: str) -> str:
+    """把 URL 里的凭证替换成 ***，保留协议与主机，方便排查代理是否配置正确。
+
+    这是公开的脱敏入口：日志、异常摘要、代理错误提示都应复用同一规则，
+    避免某个分支忘了脱敏，把代理密码带到前端或任务记录里。
+    """
     return _USERINFO_RE.sub(r"\1***@", text)
 
 
@@ -70,7 +74,7 @@ class TaskLogger:
         for raw in msg.splitlines():
             if not raw.strip():
                 continue  # 消息内部的空行不占缓冲位
-            line = _redact(raw.rstrip())
+            line = redact(raw.rstrip())
             if len(line) > self._max_line_len:
                 line = line[: self._max_line_len]
             lines.append(line)
