@@ -489,7 +489,7 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertNotIn("abc1234", operations)
         self.assertNotIn("abc1234", quickstart)
         self.assertNotIn("abc1234", readme)
-        self.assertIn("20261116-3a11e8a", quickstart)
+        self.assertIn("20261116-6b315b5", quickstart)
 
     def test_docs_describe_cache_invalidation(self):
         operations = (self.root / "docs/operations.md").read_text(encoding="utf-8")
