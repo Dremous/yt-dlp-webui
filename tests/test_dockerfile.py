@@ -54,35 +54,36 @@ class DockerfileConfigTest(unittest.TestCase):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
         self.assertNotIn("EXPOSE 8080", content)
 
-    def test_app_version_is_injected_only_in_final_stages(self):
-        """版本号每次构建都会变，不能放进公共 runtime，否则两个变体的基座都会变。"""
+    def test_app_version_is_injected_only_in_final_metadata_stages(self):
+        """版本号会变，必须只落在最终元数据阶段，不能污染安装 ffmpeg 的 base 阶段。"""
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
         runtime_body = content.split("FROM python:3.13-slim AS runtime", 1)[1].split(
-            "FROM runtime AS slim", 1
+            "FROM runtime AS slim-base", 1
         )[0]
         self.assertNotIn("ARG APP_VERSION", runtime_body)
         self.assertNotIn("ENV APP_VERSION", runtime_body)
 
         self.assertEqual(content.count("ARG APP_VERSION=dev"), 2)
-        for body in (
-            content.split("FROM runtime AS slim", 1)[1].split("FROM runtime AS latest", 1)[0],
-            content.split("FROM runtime AS latest", 1)[1],
-        ):
-            self.assertIn("ARG APP_VERSION=dev", body)
-            self.assertIn("ENV APP_VERSION=${APP_VERSION}", body)
-        # 最终阶段也必须在重量级操作之后才写版本，避免把 apt / 静态二进制层顶掉。
-        slim_body, latest_body = (
-            content.split("FROM runtime AS slim", 1)[1].split("FROM runtime AS latest", 1)[0],
-            content.split("FROM runtime AS latest", 1)[1],
-        )
-        self.assertGreater(
-            slim_body.index("ARG APP_VERSION=dev"),
-            slim_body.index("COPY --from=ffmpeg-static /out/ffprobe /usr/local/bin/ffprobe"),
-        )
-        self.assertGreater(
-            latest_body.index("ARG APP_VERSION=dev"),
-            latest_body.index("apt-get install -y --no-install-recommends ffmpeg"),
-        )
+        slim_base = content.split("FROM runtime AS slim-base", 1)[1].split(
+            "FROM slim-base AS slim", 1
+        )[0]
+        latest_base = content.split("FROM runtime AS latest-base", 1)[1].split(
+            "FROM latest-base AS latest", 1
+        )[0]
+        for base in (slim_base, latest_base):
+            self.assertNotIn("ARG APP_VERSION", base)
+            self.assertNotIn("ENV APP_VERSION", base)
+
+        slim_final = content.split("FROM slim-base AS slim", 1)[1].split(
+            "FROM runtime AS latest-base", 1
+        )[0]
+        latest_final = content.split("FROM latest-base AS latest", 1)[1]
+        for final in (slim_final, latest_final):
+            self.assertIn("ARG APP_VERSION=dev", final)
+            self.assertIn("ENV APP_VERSION=${APP_VERSION}", final)
+            # 元数据阶段不能再带 COPY / RUN，否则版本一变又会拖累重活。
+            self.assertNotIn("COPY ", final)
+            self.assertNotIn("RUN ", final)
 
     def test_runtime_stage_is_not_duplicated(self):
         instructions = self._instructions(
@@ -100,12 +101,17 @@ class DockerfileConfigTest(unittest.TestCase):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
         instructions = self._instructions(content)
         from_lines = [line for line in instructions if line.startswith("FROM ")]
-        self.assertEqual(from_lines[-1], "FROM runtime AS latest")
-        self.assertIn("FROM runtime AS slim", from_lines)
+        self.assertEqual(from_lines[-1], "FROM latest-base AS latest")
+        self.assertIn("FROM runtime AS latest-base", from_lines)
+        self.assertIn("FROM slim-base AS slim", from_lines)
 
-        latest_body = content.split("FROM runtime AS latest", 1)[1]
-        self.assertRegex(latest_body, r"apt-get install[^\n]*\n?\s*ffmpeg")
-        self.assertNotIn("ffmpeg-static", latest_body)
+        latest_base = content.split("FROM runtime AS latest-base", 1)[1].split(
+            "FROM latest-base AS latest", 1
+        )[0]
+        self.assertRegex(latest_base, r"apt-get install[^\n]*\n?\s*ffmpeg")
+        self.assertNotIn("ffmpeg-static", latest_base)
+        latest_final = content.split("FROM latest-base AS latest", 1)[1]
+        self.assertNotIn("apt-get", latest_final)
 
     def test_slim_target_uses_pinned_static_ffmpeg_and_ffprobe(self):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
@@ -124,13 +130,13 @@ class DockerfileConfigTest(unittest.TestCase):
             self.assertIn(digest, content)
         self.assertIn("sha256sum -c", content)
 
-        slim_body = content.split("FROM runtime AS slim", 1)[1].split(
-            "FROM runtime AS latest", 1
+        slim_base = content.split("FROM runtime AS slim-base", 1)[1].split(
+            "FROM slim-base AS slim", 1
         )[0]
-        self.assertIn("COPY --from=ffmpeg-static /out/ffmpeg /usr/local/bin/ffmpeg", slim_body)
-        self.assertIn("COPY --from=ffmpeg-static /out/ffprobe /usr/local/bin/ffprobe", slim_body)
-        self.assertIn("ffmpeg -version", slim_body)
-        self.assertIn("ffprobe -version", slim_body)
+        self.assertIn("COPY --from=ffmpeg-static /out/ffmpeg /usr/local/bin/ffmpeg", slim_base)
+        self.assertIn("COPY --from=ffmpeg-static /out/ffprobe /usr/local/bin/ffprobe", slim_base)
+        self.assertIn("ffmpeg -version", slim_base)
+        self.assertIn("ffprobe -version", slim_base)
 
     def test_workflow_cache_ref_is_isolated_by_ref(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(

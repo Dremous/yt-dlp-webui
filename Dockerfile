@@ -184,7 +184,7 @@ CMD ["python", "-m", "app.serve"]
 # ---------- 阶段五：slim（静态 ffmpeg） ----------
 # 复制静态二进制和 GPL 许可证；ffmpeg 与 ffprobe 都保留，避免 yt-dlp 的音频探测
 # 和元数据能力出现回归。构建期执行 --version，错架构/缺依赖会立即失败。
-FROM runtime AS slim
+FROM runtime AS slim-base
 RUN mkdir -p /usr/share/doc/ffmpeg
 COPY --from=ffmpeg-static /out/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg-static /out/ffprobe /usr/local/bin/ffprobe
@@ -192,20 +192,22 @@ COPY --from=ffmpeg-static /out/LICENSE /usr/share/doc/ffmpeg/LICENSE
 COPY --from=ffmpeg-static /out/README /usr/share/doc/ffmpeg/README.static
 RUN ffmpeg -version >/dev/null && ffprobe -version >/dev/null
 
-# 镜像标签版本只写在最终阶段：APP_VERSION 每次构建都会变，若放在公共 runtime，
-# 会改变两个变体共同基座的 image config，使下面的最终层（尤其 latest 的 apt ffmpeg）
-# 每次都按 cache miss 重建。放在重量级操作之后，只更新镜像元数据。
+# 版本号单独放最终元数据阶段：如果和静态二进制放同一阶段，APP_VERSION 每次
+# 构建都会变，BuildKit 会把这一阶段的重活一起判为 cache miss。最终阶段只写
+# ENV，不复制/安装任何东西。
+FROM slim-base AS slim
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
 
 # ---------- 阶段六：latest（apt ffmpeg，保持原有行为） ----------
 # 必须放在最后：docker build 不带 --target 时默认构建最后一个阶段，
 # 因此现有 `docker build` / CI 的默认产物仍然是 latest。
-FROM runtime AS latest
+FROM runtime AS latest-base
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# latest 的版本号同样放在 apt ffmpeg 之后；理由见 slim 阶段。
+# latest 的版本号同样放在独立的最终元数据阶段，理由见 slim。
+FROM latest-base AS latest
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
