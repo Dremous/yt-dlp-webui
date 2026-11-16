@@ -27,6 +27,8 @@ services:
       # ./downloads、./config 直接归你所有，避免宿主机改不动下载文件。
       - PUID=${PUID:-10001}
       - PGID=${PGID:-10001}
+      # 容器内时区，默认 Asia/Shanghai；改成 UTC、Asia/Tokyo 等 IANA 时区即可。
+      - TZ=${TZ:-Asia/Shanghai}
       # 自定义域名访问时添加，逗号分隔；私网 IP 和 localhost 已默认放行。
       - WEBUI_ALLOWED_HOSTS=${WEBUI_ALLOWED_HOSTS:-}
     # 让容器内可以用 host.docker.internal 指向宿主机（Linux 原生 Docker 必需，

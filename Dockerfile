@@ -53,10 +53,16 @@ ENV PORT=8080
 ENV PUID=10001 \
     PGID=10001
 
-# ffmpeg：用于视频合并与音频转码（mp3 提取必需）；gosu：入口脚本降权用
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 容器内本地时区；影响日志时间戳和任务库备份文件名。
+# 运行时可用 -e TZ=Asia/Tokyo 覆盖，入口脚本会校验 IANA 时区名。
+ENV TZ=Asia/Shanghai
+
+# ffmpeg：用于视频合并与音频转码（mp3 提取必需）；gosu：入口脚本降权用；
+# tzdata：提供 /usr/share/zoneinfo，供 TZ 变量解析时区。
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ffmpeg \
         gosu \
+        tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /app /downloads /config \
     && groupadd -r -g 10001 app \
