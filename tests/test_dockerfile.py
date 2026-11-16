@@ -22,13 +22,6 @@ class DockerfileConfigTest(unittest.TestCase):
                 return index
         self.fail(f"没有找到 Dockerfile 指令：{prefix}")
 
-    def _workflow_value(self, content, key):
-        for line in content.splitlines():
-            stripped = line.strip()
-            if stripped.startswith(f"{key}:"):
-                return stripped.split(":", 1)[1].strip()
-        self.fail(f"工作流缺少配置：{key}")
-
     def test_healthcheck_uses_the_same_port_fallback_as_the_app(self):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("from app.serve import _port", content)
@@ -75,19 +68,40 @@ class DockerfileConfigTest(unittest.TestCase):
         ]
         self.assertEqual(len(python_stages), 1)
 
-    def test_workflow_uses_registry_cache_outside_gha_quota(self):
+    def test_workflow_cache_ref_is_isolated_by_ref(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"
         )
-        cache_from = self._workflow_value(content, "cache-from")
-        cache_to = self._workflow_value(content, "cache-to")
+        # main 与 tag 不能共用同一个 cache tag，否则会互相覆盖。
+        self.assertIn("buildcache-${GITHUB_REF_TYPE}-${GITHUB_REF_NAME", content)
+        self.assertIn(
+            "CACHE_REF=ghcr.io/${GITHUB_REPOSITORY,,}:${CACHE_TAG}", content
+        )
 
-        self.assertIn("type=registry", cache_from)
-        self.assertIn(":buildcache", cache_from)
-        self.assertIn("type=registry", cache_to)
-        self.assertIn(":buildcache", cache_to)
-        self.assertIn("mode=max", cache_to)
-        self.assertIn("ignore-error=true", cache_to)
+    def test_workflow_uses_same_ref_for_cache_read_and_write(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        # 首次没有 buildcache 时不传 cache-from，有缓存时用的仍是同一个 CACHE_REF。
+        self.assertIn("name: Resolve cache source", content)
+        self.assertIn("steps.cache.outputs.from", content)
+        self.assertIn(
+            "from=type=registry,ref=${{ steps.image.outputs.CACHE_REF }}", content
+        )
+        self.assertIn(
+            "cache-to: type=registry,ref=${{ steps.image.outputs.CACHE_REF }}",
+            content,
+        )
+        self.assertIn("mode=max", content)
+        self.assertIn("ignore-error=true", content)
+
+    def test_workflow_verifies_cache_export_result(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        # ignore-error 会吞掉 cache-to 失败；单独 verify，避免静默丢缓存。
+        self.assertIn("name: Verify registry cache", content)
+        self.assertIn("docker buildx imagetools inspect", content)
 
     def test_workflow_does_not_cancel_in_progress_build(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(

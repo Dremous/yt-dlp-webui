@@ -34,6 +34,11 @@ jobs:
           echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
           echo "DATE=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
           echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          # 缓存按 ref 隔离：main 与 tag 共用 buildcache 会互相覆盖，
+          # 导致下一次构建拿到旧缓存。分支名里的 / 替换成 -，保证是合法 tag。
+          CACHE_TAG="buildcache-${GITHUB_REF_TYPE}-${GITHUB_REF_NAME//\//-}"
+          echo "CACHE_TAG=${CACHE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "CACHE_REF=ghcr.io/${GITHUB_REPOSITORY,,}:${CACHE_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -48,6 +53,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Resolve cache source
+        id: cache
+        run: |
+          # 首次构建没有 buildcache 时不要传 cache-from，避免把 missing manifest
+          # 当成构建错误；有缓存时才启用 registry cache 导入。
+          if docker buildx imagetools inspect "${{ steps.image.outputs.CACHE_REF }}" >/dev/null 2>&1; then
+            echo "from=type=registry,ref=${{ steps.image.outputs.CACHE_REF }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "from=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
@@ -59,13 +75,19 @@ jobs:
             APP_VERSION=${{ steps.image.outputs.DATE }}-${{ steps.image.outputs.SHORT_SHA }}
           # 缓存放在 GHCR 独立 tag，而不是 GitHub Actions 仓库缓存：
           # 双架构 mode=max 容易触及 GHA 缓存配额，导致旧层被淘汰、命中率下降。
-          # 首次构建时 buildcache 还不存在，BuildKit 会退化为无缓存构建。
-          cache-from: type=registry,ref=ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:buildcache,mode=max,ignore-error=true
+          cache-from: ${{ steps.cache.outputs.from }}
+          cache-to: type=registry,ref=${{ steps.image.outputs.CACHE_REF }},mode=max,ignore-error=true
           tags: |
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:latest
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ steps.image.outputs.DATE }}
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ steps.image.outputs.DATE }}-${{ steps.image.outputs.SHORT_SHA }}
+
+      - name: Verify registry cache
+        if: success()
+        run: |
+          # cache-to 的 ignore-error 不让构建失败；这里显式验证缓存确实写入了，
+          # 否则缓存导出失败会被静默吞掉。
+          docker buildx imagetools inspect "${{ steps.image.outputs.CACHE_REF }}" >/dev/null
 
       - name: 构建失败通知
         if: failure()
