@@ -204,11 +204,23 @@ class TaskStore:
             finally:
                 conn.close()
 
+    @staticmethod
+    def task_values(task) -> tuple:
+        """把任务对象转成落盘字段值，供调用方在锁外安全地写库。"""
+        return tuple(getattr(task, name, None) for name in _COLUMNS)
+
     def save(self, task) -> None:
         """写入或更新一条任务记录（按 id UPSERT）。"""
+        self.save_values(self.task_values(task))
+
+    def save_values(self, values: tuple) -> None:
+        """写入一条已经快照好的任务字段值。
+
+        调用方可以先在任务锁内复制 values，再在锁外调用本方法，避免把 SQLite
+        的磁盘等待带进任务状态锁。
+        """
         if self._disabled:
             return
-        values = tuple(getattr(task, name, None) for name in _COLUMNS)
         placeholders = ", ".join("?" for _ in _COLUMNS)
         updates = ", ".join(f"{name} = excluded.{name}" for name in _COLUMNS if name != "id")
         sql = (
