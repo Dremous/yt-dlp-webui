@@ -80,9 +80,17 @@ python -m unittest discover -s tests -v
 | `LOG_BACKUPS` | `5` | 保留的历史日志文件个数 |
 | `LOG_CONSOLE` | `1` | 置 `0` 则只写文件，不再打印到 `docker logs` |
 | `PORT` | `8080` | 容器内监听端口；健康检查与 compose 端口映射会跟随该变量 |
+| `PUID` | `10001` | 容器内进程与挂载目录的 UID；设为宿主机用户（如 `1000`）可避免下载文件归属错位 |
+| `PGID` | `10001` | 容器内进程与挂载目录的 GID；通常与 `PUID` 一起设置 |
 | `WEBUI_ALLOWED_HOSTS` | 空 | 额外放行的 Host（逗号分隔，如自定义域名）；localhost、私网 IP、`host.docker.internal` 默认放行 |
 
 对外端口默认 8080，可用 `PORT` 覆盖；容器内监听、健康检查与 compose 映射会一起跟随。
+
+`PUID` / `PGID` 默认为 `10001:10001`。如果宿主机用户 UID/GID 是 `1000`，在 `.env` 或
+compose 环境里设置 `PUID=1000`、`PGID=1000`，重启容器后入口脚本会先递归修正
+`/downloads`、`/config` 与 `/home/app` 的归属，再以该 UID/GID 启动 uvicorn。
+只接受 1-2147483647 的整数；设为 `0` 或非数字会拒绝启动，避免意外回到 root。
+用 `docker run --user` 直接指定用户时，入口脚本不会执行 chown，需要自行保证挂载目录可写。
 
 `docker-compose.yml` 的 `BIND_ADDR` 控制宿主机绑定网卡，默认 `0.0.0.0` 以保持现有局域网访问；
 建议设为具体 LAN IP（如 `192.168.1.10`）以避开 VPN/公网网卡，设为 `127.0.0.1` 则只允许本机访问。

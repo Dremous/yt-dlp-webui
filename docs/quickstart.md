@@ -77,6 +77,10 @@ docker compose up -d
 
 `docker-compose.yml` 已经写好卷映射、环境变量和 `extra_hosts`，适合长期部署。
 
+下载文件默认归属容器内 UID/GID `10001`。要让文件直接归宿主机用户，在项目根目录的
+`.env` 里写 `PUID=1000`、`PGID=1000`（改成 `id -u` / `id -g` 的实际值），再
+`docker compose up -d`；入口脚本会修正 `./downloads` 和 `./config` 的归属后降权运行。
+
 ### 从源码构建镜像
 
 ```bash

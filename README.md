@@ -56,6 +56,8 @@ docker run -d --name yt-dlp-webui \
   和 `host.docker.internal` 已默认放行。写请求还需要 `X-WebUI-Request: 1`，前端已自动携带。
 - 建议把 compose 的 `BIND_ADDR` 设为具体 LAN IP（如 `192.168.1.10`），避免容器同时监听
   VPN/公网网卡；设为 `127.0.0.1` 则只允许本机访问。
+- 下载文件默认归属容器内 UID/GID `10001`。若希望在宿主机上直接编辑或删除这些文件，
+  设置 `PUID=1000 PGID=1000`（compose 的 `.env` 或 `docker run -e`）让容器以你的用户身份运行。
 - 请遵守目标网站的条款与版权规定，仅下载你有权下载的内容。
 - 使用 Cookie 时注意保密：`./config` 目录含登录凭证与代理地址（可能带账号密码），
   不要提交到公开仓库（已加入 `.gitignore`）。代理状态接口只返回脱敏地址，凭证不会回显。
