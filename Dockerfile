@@ -3,7 +3,7 @@
 #
 # 阶段一：构建 HeroUI 前端（node 构建产物输出到 app/static）
 # 阶段二：取 JavaScript 运行时（deno，供 yt-dlp 的 EJS 使用）
-# 阶段三：下载静态 ffmpeg（仅 slim 变体使用）
+# 阶段三：下载 BtbN GPL 静态 ffmpeg（仅 slim 变体使用）
 # 阶段四：后端运行时公共层（python + deno + 静态前端，不含 ffmpeg）
 # 阶段五：slim（静态 ffmpeg）
 # 阶段六：latest（apt ffmpeg，保持原有行为；作为默认 target 放在最后）
@@ -14,10 +14,6 @@
 # 必须在第一个 FROM 之前声明：只有全局作用域的 ARG 才能参与 FROM 的变量替换。
 # 若 denoland/deno 上该 tag 不存在，改成 bin-latest 即可。
 ARG DENO_VERSION=2.9.7
-
-# 静态 ffmpeg 的镜像标签。CI 每次构建会解析 mwader/static-ffmpeg 的最新稳定
-# tag 并通过 --build-arg 传入；这里保留一个可复现的 fallback，方便本地直接构建。
-ARG FFMPEG_STATIC_IMAGE=mwader/static-ffmpeg:9.0.2-1
 
 # ---------- 阶段一：前端构建 ----------
 # --platform=$BUILDPLATFORM：前端产物是纯静态 JS/HTML/CSS，与目标架构无关。
@@ -41,11 +37,39 @@ RUN npm run build
 # 多架构构建时按目标平台自动选对应架构的二进制（amd64 / arm64 均有）。
 FROM denoland/deno:bin-${DENO_VERSION} AS deno-bin
 
-# ---------- 阶段三：静态 ffmpeg（仅 slim 使用） ----------
-# wader/static-ffmpeg 把 ffmpeg/ffprobe 编译为静态 PIE 二进制，并提供多架构
-# Docker 镜像；CI 每次构建解析最新稳定 tag，因此 slim 不再固定在 7.0.2。
-# 只从该镜像取 ffmpeg、ffprobe 和 versions.json，不把字体/文档带进最终镜像。
-FROM ${FFMPEG_STATIC_IMAGE} AS ffmpeg-static
+# ---------- 阶段三：BtbN GPL 静态 ffmpeg（仅 slim 使用） ----------
+# BtbN/FFmpeg-Builds 的 GPL 构建把 FFmpeg 库静态编进 ffmpeg/ffprobe，运行时
+# 只依赖 Debian 自带的 glibc。CI 每次构建会解析 latest release 中最高版本的
+# nX.Y 稳定分支资产；FFMPEG_BUILDS_REFRESH 用 run id 强制刷新，避免 Docker
+# 因为资产名不变而命中旧层、继续使用上一次下载的二进制。
+FROM debian:bookworm-slim AS ffmpeg-static
+ARG TARGETARCH
+ARG FFMPEG_BUILDS_VERSION=9.0
+ARG FFMPEG_BUILDS_REFRESH=local
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    echo "BtbN GPL ffmpeg refresh: ${FFMPEG_BUILDS_REFRESH}"; \
+    case "${TARGETARCH}" in \
+      amd64) ARCH=linux64 ;; \
+      arm64) ARCH=linuxarm64 ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    ASSET="ffmpeg-n${FFMPEG_BUILDS_VERSION}-latest-${ARCH}-gpl-${FFMPEG_BUILDS_VERSION}.tar.xz"; \
+    mkdir -p /opt/ffmpeg; \
+    curl -fL --retry 3 --retry-delay 5 -o "/tmp/${ASSET}" \
+      "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${ASSET}"; \
+    tar -xJf "/tmp/${ASSET}" --strip-components=1 -C /opt/ffmpeg; \
+    rm -f "/tmp/${ASSET}"; \
+    /opt/ffmpeg/bin/ffmpeg -version > /opt/ffmpeg/version.txt; \
+    /opt/ffmpeg/bin/ffprobe -version >> /opt/ffmpeg/version.txt; \
+    cat /opt/ffmpeg/version.txt
 
 # ---------- 阶段四：后端运行时公共层 ----------
 FROM python:3.13-slim AS runtime
@@ -133,15 +157,16 @@ VOLUME /downloads /config
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python", "-m", "app.serve"]
 
-# ---------- 阶段五：slim（静态 ffmpeg） ----------
-# 复制静态二进制和 GPL 许可证；ffmpeg 与 ffprobe 都保留，避免 yt-dlp 的音频探测
-# 和元数据能力出现回归。构建期执行 --version，错架构/缺依赖会立即失败。
+# ---------- 阶段五：slim（BtbN GPL ffmpeg） ----------
+# 复制 BtbN 的 ffmpeg/ffprobe 和随包 LICENSE.txt；ffmpeg 与 ffprobe 都保留，
+# 避免 yt-dlp 的音频探测和元数据能力出现回归。构建期执行 --version，
+# 错架构/缺 glibc 依赖会立即失败。
 FROM runtime AS slim-base
 RUN mkdir -p /usr/share/doc/ffmpeg
-COPY --from=ffmpeg-static /ffmpeg /usr/local/bin/ffmpeg
-COPY --from=ffmpeg-static /ffprobe /usr/local/bin/ffprobe
-COPY --from=ffmpeg-static /versions.json /usr/share/doc/ffmpeg/versions.json
-COPY --from=runtime /usr/share/common-licenses/GPL-3 /usr/share/doc/ffmpeg/LICENSE
+COPY --from=ffmpeg-static /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg-static /opt/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe
+COPY --from=ffmpeg-static /opt/ffmpeg/LICENSE.txt /usr/share/doc/ffmpeg/LICENSE
+COPY --from=ffmpeg-static /opt/ffmpeg/version.txt /usr/share/doc/ffmpeg/version.txt
 RUN ffmpeg -version >/dev/null && ffprobe -version >/dev/null
 
 # 版本号单独放最终元数据阶段：如果和静态二进制放同一阶段，APP_VERSION 每次
