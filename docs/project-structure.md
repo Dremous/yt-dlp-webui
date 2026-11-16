@@ -16,8 +16,12 @@
 ├── docker-compose.yml            # Compose 编排（downloads + config 卷）
 ├── requirements.txt              # Python 依赖（yt-dlp 由 Dockerfile 装 nightly）
 ├── assets/readme/                # 文档配图（纯 SVG，可手改）
-├── .github/workflows/
-│   └── build-image.yml           # 定时构建并推送 GHCR
+├── .github/
+│   ├── scripts/
+│   │   ├── resolve_btbn_release.py   # 解析 BtbN latest stable GPL 资产与 digest
+│   │   └── verify_registry_cache.sh  # registry cache 非阻塞可观测性检查
+│   └── workflows/
+│       └── build-image.yml           # 定时构建并推送 GHCR
 ├── web/                          # 前端源码（React + HeroUI + Vite）
 │   ├── index.html
 │   ├── package.json
@@ -43,6 +47,7 @@
 │   ├── serve.py                  # 容器入口：配好日志再启动 uvicorn
 │   └── static/                   # 前端构建产物（vite 自动输出，勿手改）
 └── tests/
+    ├── test_btbn_release.py      # BtbN resolver 失败分支与 cache 告警行为
     ├── test_tasklog.py           # 日志脱敏与摘要
     ├── test_task_lifecycle.py    # 任务删除与目录清理策略
     ├── test_resume_and_proxy.py  # 断点续传接管与代理地址规范化

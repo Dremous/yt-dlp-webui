@@ -39,7 +39,7 @@ docker run -d --name yt-dlp-webui \
 
 镜像只有一个 `latest` 变体，内置 BtbN 的 GPL 静态 ffmpeg。CI 每次构建会解析其最新稳定的
 nX.Y 分支，并保留 MP4 合并、MP3 转码、PUID/PGID、TZ 与 YouTube EJS。需要固定某次构建时，
-可以改用日期标签（形如 `YYYYMMDD-<短 SHA>`，例如 `20261116-6b315b5`）。
+可以改用日期标签（形如 `YYYYMMDD-<短 SHA>`，例如历史构建 `20261116-6b315b5`，以 GHCR 实际标签为准）。
 
 原先的 `slim` 标签已停止更新；原 slim 用户请改用 `latest` 或对应日期标签。
 

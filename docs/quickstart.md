@@ -67,13 +67,16 @@ docker run -d --name yt-dlp-webui \
 最新稳定的 nX.Y 分支，MP4 合并、MP3 转码、PUID/PGID、TZ 与 YouTube EJS 都保留。
 
 需要固定某次构建时，把 `latest` 换成日期标签。日期标签形如
-`YYYYMMDD-<短 SHA>`（`DATE-SHORT_SHA`），例如当前构建的 `20261116-6b315b5`：
+`YYYYMMDD-<短 SHA>`（`DATE-SHORT_SHA`），例如历史构建 `20261116-6b315b5`
+（以 GHCR 实际标签为准）：
 
 ```text
 ghcr.io/dremous/yt-dlp-webui:20261116-6b315b5
 ```
 
-日期标签不可变，适合排查“某次构建后才出现”的问题；浮动的 `latest` 会随 CI 更新。
+日期标签用于定位某次构建，但不是永久不可变：同一日期/同一提交重跑仍可能覆盖
+对应 tag。需要严格固定镜像时，请使用 digest 引用（`ghcr.io/dremous/yt-dlp-webui@sha256:<digest>`）；
+浮动的 `latest` 会随 CI 更新。
 
 原先的 `slim` 标签已停止更新；原 slim 用户请改用 `latest` 或对应日期标签。
 

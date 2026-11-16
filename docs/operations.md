@@ -40,19 +40,20 @@ BtbN 下载阶段会带 `FFMPEG_BUILDS_REFRESH`（run id），这是为了每次
   元数据能力退化；PUID/PGID、TZ、非 root 运行、YouTube EJS 全部保留。
 
 不再使用 Debian apt 的 ffmpeg 变体。BtbN 的 nX.Y 稳定分支有新构建时，下一次 CI 会
-重新下载；当前 n9.0 资产为 FFmpeg `n9.0.2-57-g...` 自动构建。代价是构建结果会随上游
-资产变化，不再由仓库里的 SHA256 锁定；许可证和 `version.txt` 会复制到
-`/usr/share/doc/ffmpeg/` 便于审计。BtbN GPL 构建的编解码器集合与 Debian 版不完全
-相同，且二进制明显更大。
+重新下载；具体 FFmpeg build 版本以本次构建的 `version.txt` 或 CI 日志为准。代价是
+构建结果会随上游资产变化，不再由仓库里的 SHA256 锁定；`LICENSE`、`SOURCE.txt`
+和 `version.txt` 会复制到 `/usr/share/doc/ffmpeg/` 便于审计。BtbN GPL 构建的编解码器集合与 Debian 版不完全
+相同，且二进制明显更大。CI 对 Release asset 的 digest 校验属于完整性校验，不能替代
+对上游发布账户的信任。
 
 ### GPL 合规
 
 镜像内 `/usr/share/doc/ffmpeg/` 同时保留：
 
 - `LICENSE`：BtbN 随包提供的 GPL 许可证文本。
-- `SOURCE.txt`：FFmpeg 对应源码入口（精确提交见 `version.txt`）、版本 tarball 地址，
+- `SOURCE.txt`：从镜像内 `version.txt` 的 git commit 生成的 FFmpeg 源码树地址，
   以及 BtbN 构建脚本地址。
-- `version.txt`：实际打包进镜像的 ffmpeg/ffprobe 版本。
+- `version.txt`：实际打包进镜像的 ffmpeg/ffprobe 版本，也是源码 commit 的来源。
 
 对外分发镜像时请保留这些文件；如果采用书面提供源码的方式，需要确保
 `SOURCE.txt` 中的地址长期有效。
