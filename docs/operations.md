@@ -80,7 +80,12 @@ python -m unittest discover -s tests -v
 | `LOG_BACKUPS` | `5` | 保留的历史日志文件个数 |
 | `LOG_CONSOLE` | `1` | 置 `0` 则只写文件，不再打印到 `docker logs` |
 | `PORT` | `8080` | 容器内监听端口；健康检查与 compose 端口映射会跟随该变量 |
+| `WEBUI_ALLOWED_HOSTS` | 空 | 额外放行的 Host（逗号分隔，如自定义域名）；localhost、私网 IP、`host.docker.internal` 默认放行 |
 
 对外端口默认 8080，可用 `PORT` 覆盖；容器内监听、健康检查与 compose 映射会一起跟随。
+
+`docker-compose.yml` 的 `BIND_ADDR` 控制宿主机绑定网卡，默认 `0.0.0.0` 以保持现有局域网访问；
+建议设为具体 LAN IP（如 `192.168.1.10`）以避开 VPN/公网网卡，设为 `127.0.0.1` 则只允许本机访问。
+自定义域名访问时还要把域名写入 `WEBUI_ALLOWED_HOSTS`，否则 Host 校验会返回 400。
 
 `PORT` 必须是 1-65535 的整数。`docker run` 下非法值（如 `abc`）会让应用回退到 8080，健康检查也走同一回退；`docker compose` 会在解析端口映射时直接报错（fail-fast），不会启动出“应用监听 8080、映射却是 abc:abc”的不一致容器。

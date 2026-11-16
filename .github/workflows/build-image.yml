@@ -35,8 +35,12 @@ jobs:
           echo "DATE=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
           echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           # 缓存按 ref 隔离：main 与 tag 共用 buildcache 会互相覆盖，
-          # 导致下一次构建拿到旧缓存。分支名里的 / 替换成 -，保证是合法 tag。
-          CACHE_TAG="buildcache-${GITHUB_REF_TYPE}-${GITHUB_REF_NAME//\//-}"
+          # 导致下一次构建拿到旧缓存。branch/tag 名可能含 /、中文、空格等
+          # OCI tag 不允许的字符，也可能超长；先清洗成合法字符并截断，
+          # 再拼 12 位 hash，保证不同 ref 不会因为截断而撞到同一个 tag。
+          SAFE_REF=$(printf '%s' "$GITHUB_REF_NAME" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-60)
+          REF_HASH=$(printf '%s' "${GITHUB_REF_TYPE}/${GITHUB_REF_NAME}" | sha256sum | cut -c1-12)
+          CACHE_TAG="buildcache-${GITHUB_REF_TYPE}-${SAFE_REF}-${REF_HASH}"
           echo "CACHE_TAG=${CACHE_TAG}" >> "$GITHUB_OUTPUT"
           echo "CACHE_REF=ghcr.io/${GITHUB_REPOSITORY,,}:${CACHE_TAG}" >> "$GITHUB_OUTPUT"
 
