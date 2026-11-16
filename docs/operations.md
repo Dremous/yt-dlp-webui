@@ -21,7 +21,10 @@
 | slim（静态 ffmpeg） | `slim`、`DATE-slim`、`DATE-SHORT_SHA-slim` |
 
 两个变体共用同一套 Python/Deno/应用层，CI 用独立 registry cache tag 分别写入；
-构建时会读取另一变体的 cache 复用公共层，但不写入对方的 tag。
+构建时会读取另一变体的 cache 复用公共层，但不写入对方的 tag。缓存 tag 只按
+ref/变体区分，不包含 `DATE` 或 commit SHA；`APP_VERSION` 只写在最终阶段，
+避免每次构建都改变公共 `runtime` 的 image config，导致 apt / 静态二进制层
+被判定为 cache miss。
 
 ### latest 与 slim 的区别
 
