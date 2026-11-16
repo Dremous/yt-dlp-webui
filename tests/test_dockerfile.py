@@ -54,36 +54,28 @@ class DockerfileConfigTest(unittest.TestCase):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
         self.assertNotIn("EXPOSE 8080", content)
 
-    def test_app_version_is_injected_only_in_final_metadata_stages(self):
+    def test_app_version_is_injected_only_in_final_metadata_stage(self):
         """版本号会变，必须只落在最终元数据阶段，不能污染安装 ffmpeg 的 base 阶段。"""
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
         runtime_body = content.split("FROM python:3.13-slim AS runtime", 1)[1].split(
-            "FROM runtime AS slim-base", 1
+            "FROM runtime AS latest-base", 1
         )[0]
         self.assertNotIn("ARG APP_VERSION", runtime_body)
         self.assertNotIn("ENV APP_VERSION", runtime_body)
 
-        self.assertEqual(content.count("ARG APP_VERSION=dev"), 2)
-        slim_base = content.split("FROM runtime AS slim-base", 1)[1].split(
-            "FROM slim-base AS slim", 1
-        )[0]
+        self.assertEqual(content.count("ARG APP_VERSION=dev"), 1)
         latest_base = content.split("FROM runtime AS latest-base", 1)[1].split(
             "FROM latest-base AS latest", 1
         )[0]
-        for base in (slim_base, latest_base):
-            self.assertNotIn("ARG APP_VERSION", base)
-            self.assertNotIn("ENV APP_VERSION", base)
+        self.assertNotIn("ARG APP_VERSION", latest_base)
+        self.assertNotIn("ENV APP_VERSION", latest_base)
 
-        slim_final = content.split("FROM slim-base AS slim", 1)[1].split(
-            "FROM runtime AS latest-base", 1
-        )[0]
         latest_final = content.split("FROM latest-base AS latest", 1)[1]
-        for final in (slim_final, latest_final):
-            self.assertIn("ARG APP_VERSION=dev", final)
-            self.assertIn("ENV APP_VERSION=${APP_VERSION}", final)
-            # 元数据阶段不能再带 COPY / RUN，否则版本一变又会拖累重活。
-            self.assertNotIn("COPY ", final)
-            self.assertNotIn("RUN ", final)
+        self.assertIn("ARG APP_VERSION=dev", latest_final)
+        self.assertIn("ENV APP_VERSION=${APP_VERSION}", latest_final)
+        # 元数据阶段不能再带 COPY / RUN，否则版本一变又会拖累重活。
+        self.assertNotIn("COPY ", latest_final)
+        self.assertNotIn("RUN ", latest_final)
 
     def test_runtime_stage_is_not_duplicated(self):
         instructions = self._instructions(
@@ -96,27 +88,43 @@ class DockerfileConfigTest(unittest.TestCase):
         ]
         self.assertEqual(len(python_stages), 1)
 
-    def test_latest_target_keeps_apt_ffmpeg_and_is_default(self):
-        """默认 build target 必须仍是 latest，且 latest 仍走 apt ffmpeg。"""
+    def test_latest_target_uses_btbn_and_is_default(self):
+        """默认 build target 必须是 latest，且 latest 使用 BtbN 静态 ffmpeg。"""
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
         instructions = self._instructions(content)
         from_lines = [line for line in instructions if line.startswith("FROM ")]
         self.assertEqual(from_lines[-1], "FROM latest-base AS latest")
         self.assertIn("FROM runtime AS latest-base", from_lines)
-        self.assertIn("FROM slim-base AS slim", from_lines)
+        self.assertNotIn("FROM runtime AS slim-base", from_lines)
+        self.assertNotIn("FROM slim-base AS slim", from_lines)
 
         latest_base = content.split("FROM runtime AS latest-base", 1)[1].split(
             "FROM latest-base AS latest", 1
         )[0]
-        self.assertRegex(latest_base, r"apt-get install[^\n]*\n?\s*ffmpeg")
-        self.assertNotIn("ffmpeg-static", latest_base)
+        self.assertIn(
+            "COPY --from=ffmpeg-static /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg",
+            latest_base,
+        )
+        self.assertIn(
+            "COPY --from=ffmpeg-static /opt/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe",
+            latest_base,
+        )
+        self.assertIn("ffmpeg -version", latest_base)
+        self.assertIn("ffprobe -version", latest_base)
+        self.assertNotIn("apt-get install -y --no-install-recommends ffmpeg", latest_base)
         latest_final = content.split("FROM latest-base AS latest", 1)[1]
         self.assertNotIn("apt-get", latest_final)
 
-    def test_slim_target_uses_latest_stable_btbn_gpl_build(self):
+    def test_dockerfile_has_no_apt_ffmpeg_variant(self):
+        content = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        self.assertNotIn("apt-get install -y --no-install-recommends ffmpeg", content)
+        self.assertNotIn("AS latest-base\nRUN apt-get", content)
+        self.assertNotIn("AS slim", content)
+
+    def test_latest_target_uses_latest_stable_btbn_gpl_build(self):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
         # BtbN 的 latest release 里同时有 master 和 n9.0/n8.1 稳定分支；
-        # 这里只取稳定分支的 GPL 构建，不能让 slim 变成 master 快照。
+        # 这里只取稳定分支的 GPL 构建，不能让 latest 变成 master 快照。
         self.assertIn("ARG FFMPEG_BUILDS_VERSION=9.0", content)
         self.assertIn("FROM debian:bookworm-slim AS ffmpeg-static", content)
         self.assertIn("BtbN/FFmpeg-Builds/releases/download/latest", content)
@@ -131,14 +139,20 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertNotIn("ffmpeg-linux-x64.gz", content)
         self.assertNotIn("sha256sum -c", content)
 
-        slim_base = content.split("FROM runtime AS slim-base", 1)[1].split(
-            "FROM slim-base AS slim", 1
+        latest_base = content.split("FROM runtime AS latest-base", 1)[1].split(
+            "FROM latest-base AS latest", 1
         )[0]
-        self.assertIn("COPY --from=ffmpeg-static /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg", slim_base)
-        self.assertIn("COPY --from=ffmpeg-static /opt/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe", slim_base)
-        self.assertIn("COPY --from=ffmpeg-static /opt/ffmpeg/LICENSE.txt", slim_base)
-        self.assertIn("ffmpeg -version", slim_base)
-        self.assertIn("ffprobe -version", slim_base)
+        self.assertIn(
+            "COPY --from=ffmpeg-static /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg",
+            latest_base,
+        )
+        self.assertIn(
+            "COPY --from=ffmpeg-static /opt/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe",
+            latest_base,
+        )
+        self.assertIn("COPY --from=ffmpeg-static /opt/ffmpeg/LICENSE.txt", latest_base)
+        self.assertIn("ffmpeg -version", latest_base)
+        self.assertIn("ffprobe -version", latest_base)
 
     def test_workflow_resolves_latest_stable_btbn_gpl_build(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
@@ -161,51 +175,54 @@ class DockerfileConfigTest(unittest.TestCase):
             encoding="utf-8"
         )
         # main 与 tag 不能共用同一个 cache tag，否则会互相覆盖；
-        # latest/slim 也必须各自写独立的 cache tag，避免两个变体互相覆盖。
+        # 单一 latest 变体使用固定的 latest 前缀，branch/tag 名清洗后再拼 hash。
         self.assertIn("SAFE_REF=", content)
         self.assertIn("REF_HASH=", content)
         self.assertIn("tr -cs", content)
         self.assertIn("sha256sum", content)
         self.assertIn(
-            'CACHE_TAG="buildcache-${VARIANT}-${GITHUB_REF_TYPE}-${SAFE_REF}-${REF_HASH}"',
+            'CACHE_TAG="buildcache-latest-${GITHUB_REF_TYPE}-${SAFE_REF}-${REF_HASH}"',
             content,
         )
         self.assertIn(
             "CACHE_REF=ghcr.io/${IMAGE_NAME}:${CACHE_TAG}", content
         )
 
-    def test_workflow_builds_latest_and_slim_targets(self):
+    def test_workflow_builds_single_latest_target(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("variant: latest", content)
-        self.assertIn("variant: slim", content)
-        self.assertIn("target: ${{ matrix.target }}", content)
-        self.assertIn('if [ "$VARIANT" = "latest" ]', content)
-        self.assertIn("ghcr.io/${IMAGE_NAME}:${VARIANT}", content)
-        self.assertIn("ghcr.io/${IMAGE_NAME}:${DATE}-${VARIANT}", content)
-        self.assertIn(
-            "ghcr.io/${IMAGE_NAME}:${DATE}-${SHORT_SHA}-${VARIANT}", content
-        )
+        self.assertIn("target: latest", content)
+        self.assertNotIn("variant: slim", content)
+        self.assertNotIn("matrix.variant", content)
+        self.assertIn("ghcr.io/${IMAGE_NAME}:latest", content)
+        self.assertIn("ghcr.io/${IMAGE_NAME}:${DATE}", content)
+        self.assertIn("ghcr.io/${IMAGE_NAME}:${DATE}-${SHORT_SHA}", content)
+        self.assertNotIn("${DATE}-${VARIANT}", content)
+        self.assertNotIn("${DATE}-${SHORT_SHA}-${VARIANT}", content)
 
-    def test_workflow_reuses_other_variant_cache_read_only(self):
+    def test_workflow_uses_single_cache_ref(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"
         )
-        # 两个变体各自写自己的 cache tag，但读取时可以复用另一变体的公共层。
-        self.assertIn("OTHER_CACHE_REF", content)
-        self.assertIn('for ref in "${{ steps.image.outputs.CACHE_REF }}"', content)
+        # 单一变体只读自己的 CACHE_REF，不再存在另一变体的 cache 复用逻辑。
+        self.assertNotIn("OTHER_CACHE_REF", content)
+        self.assertNotIn("OTHER_VARIANT", content)
+        self.assertIn("steps.image.outputs.CACHE_REF", content)
         self.assertIn("from<<EOF", content)
 
-    def test_workflow_smoke_tests_both_variants(self):
+    def test_workflow_smoke_tests_latest(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn("smoke:", content)
+        self.assertNotIn("matrix:", content)
         self.assertIn("--entrypoint ffmpeg", content)
         self.assertIn("--entrypoint ffprobe", content)
-        self.assertIn("Verify slim MP3 encoder", content)
+        self.assertIn("Verify MP3 encoder", content)
         self.assertIn("libmp3lame", content)
+        self.assertIn("docker pull \"ghcr.io/${IMAGE_NAME}:latest\"", content)
+        self.assertNotIn("variant: [latest, slim]", content)
 
     def test_runtime_user_can_be_overridden_with_puid_pgid(self):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
@@ -383,11 +400,10 @@ class DockerfileConfigTest(unittest.TestCase):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"
         )
-        # 首次没有 buildcache 时不传 cache-from，有缓存时用的仍是同一个 CACHE_REF；
-        # 另一变体只加入 cache-from 读取，不参与 cache-to 写入。
+        # 首次没有 buildcache 时不传 cache-from，有缓存时用的仍是同一个 CACHE_REF。
         self.assertIn("name: Resolve cache source", content)
         self.assertIn("steps.cache.outputs.from", content)
-        self.assertIn('echo "type=registry,ref=${ref}"', content)
+        self.assertIn('echo "type=registry,ref=${REF}"', content)
         self.assertIn(
             "cache-to: type=registry,ref=${{ steps.image.outputs.CACHE_REF }}",
             content,
@@ -409,14 +425,16 @@ class DockerfileConfigTest(unittest.TestCase):
         )
         self.assertRegex(content, r"(?m)^\s*cancel-in-progress:\s*false\s*$")
 
-    def test_docs_explain_slim_image_tag(self):
+    def test_docs_describe_single_latest_image(self):
         quickstart = (self.root / "docs/quickstart.md").read_text(encoding="utf-8")
         operations = (self.root / "docs/operations.md").read_text(encoding="utf-8")
         readme = (self.root / "README.md").read_text(encoding="utf-8")
-        for content in (quickstart, operations, readme):
-            self.assertIn("slim", content)
-        self.assertIn("IMAGE_TAG=slim", quickstart)
         self.assertIn("BtbN/FFmpeg-Builds", operations)
+        self.assertIn("latest", operations)
+        self.assertNotIn("IMAGE_TAG=slim", quickstart)
+        self.assertNotIn(":slim", quickstart)
+        self.assertNotIn(":slim", readme)
+        self.assertNotIn("slim（静态 ffmpeg）", operations)
 
 
 if __name__ == "__main__":
