@@ -68,11 +68,19 @@ setup_logging()
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
 COOKIE_FILE = Path(os.environ.get("COOKIE_FILE", "/config/cookies.txt"))
 PROXY_FILE = Path(os.environ.get("PROXY_FILE", "/config/proxy.txt"))
+# PO Token sidecar 地址；不配置时保持 yt-dlp 原有行为。compose 会指向 bgutil-provider。
+POT_PROVIDER_URL = os.environ.get("POT_PROVIDER_URL", "")
 # 任务记录库：默认与 Cookie 同卷（配置卷小且必须持久），可用 TASKS_DB 单独指定
 TASKS_DB = os.environ.get("TASKS_DB") or str(Path(COOKIE_FILE).parent / "tasks.db")
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-manager = DownloadManager(DOWNLOAD_DIR, COOKIE_FILE, PROXY_FILE, store=TaskStore(TASKS_DB))
+manager = DownloadManager(
+    DOWNLOAD_DIR,
+    COOKIE_FILE,
+    PROXY_FILE,
+    store=TaskStore(TASKS_DB),
+    pot_provider_url=POT_PROVIDER_URL,
+)
 
 # 代理连通性探测目标：Google 的 204 探针端点，无正文、开销极小；
 # 且它与 YouTube 同属被墙域名，能真实反映「这个代理到底能不能出去看 YouTube」。

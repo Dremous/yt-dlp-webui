@@ -20,6 +20,8 @@ services:
       - DOWNLOAD_DIR=/downloads
       - COOKIE_FILE=/config/cookies.txt
       - PROXY_FILE=/config/proxy.txt
+      # bgutil PO Token sidecar 地址；与下面的服务名/端口保持一致。
+      - POT_PROVIDER_URL=http://bgutil-provider:4416
       # 运行日志落盘（轮转与级别可用 LOG_MAX_MB / LOG_BACKUPS / LOG_LEVEL 调整）
       - LOG_FILE=/config/webui.log
       # 容器内监听端口；与上面的 ports 映射使用同一个变量
@@ -37,3 +39,18 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+    depends_on:
+      - bgutil-provider
+
+  # PO Token 生成 sidecar：仅在缺少 PO Token 时被 yt-dlp 请求，不占用下载线程。
+  # 不映射宿主机端口：只让同一 compose 网络里的 webui 访问，避免无认证的
+  # provider 暴露到局域网。
+  bgutil-provider:
+    container_name: bgutil-provider
+    image: brainicism/bgutil-ytdlp-pot-provider:${BGUTIL_VERSION:-2.0.2}
+    restart: unless-stopped
+    init: true
+    expose:
+      - "4416"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

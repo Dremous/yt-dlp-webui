@@ -22,6 +22,7 @@ from typing import Dict, List, Optional
 
 import yt_dlp
 
+from .cookie_meta import parse_cookie_metadata
 from .store import TaskStore
 from .tasklog import TaskLogger, redact
 
@@ -306,14 +307,19 @@ class DownloadManager:
     proxy_file：可选。指向保存代理地址的文本文件（一行 URL），
     若存在则让 yt-dlp 的出站请求走该代理，用于国内访问 YouTube 等被墙站点。
     store：可选。任务记录的持久化后端（见 app/store.py）。传入时启动即恢复历史任务。
+    pot_provider_url：可选。bgutil PO Token HTTP provider 的地址；配置后交给
+    yt-dlp 的 youtubepot-bgutilhttp provider，用于缓解 YouTube 的 bot 校验/403。
     """
 
     def __init__(self, download_dir: Path, cookie_file: Optional[str] = None,
-                 proxy_file: Optional[str] = None, store: Optional[TaskStore] = None):
+                 proxy_file: Optional[str] = None, store: Optional[TaskStore] = None,
+                 pot_provider_url: Optional[str] = None):
         self.download_dir = Path(download_dir)
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.cookie_file = Path(cookie_file) if cookie_file else None
         self.proxy_file = Path(proxy_file) if proxy_file else None
+        # 空字符串表示不启用 provider；去掉尾部斜杠，避免拼出 //get_pot。
+        self.pot_provider_url = (pot_provider_url or "").strip().rstrip("/") or None
         self.tasks: Dict[str, DownloadTask] = {}
         self._lock = threading.Lock()
         self._slots = threading.BoundedSemaphore(MAX_CONCURRENT)
@@ -371,14 +377,38 @@ class DownloadManager:
             self.cookie_file.unlink()
 
     def cookie_info(self) -> dict:
-        """返回 Cookie 状态信息。"""
+        """返回 Cookie 状态信息，包含条数与过期提醒。
+
+        Cookie 值只在下载时交给 yt-dlp，接口和前端都不需要读取；这里只统计
+        expires 字段，避免把登录凭证通过 /api/cookies/status 回传。
+        """
         if not self.cookie_ready():
             return {"active": False}
+        try:
+            text = self.cookie_file.read_text(encoding="utf-8", errors="replace")
+            readable = True
+        except OSError:
+            text = ""
+            readable = False
+
+        meta = parse_cookie_metadata(text)
         return {
             "active": True,
             "name": self.cookie_file.name,
             "updated": int(self.cookie_file.stat().st_mtime),
             "size": self.cookie_file.stat().st_size,
+            "readable": readable,
+            **meta,
+        }
+
+    def _pot_extractor_args(self) -> Optional[dict]:
+        """返回 bgutil HTTP provider 的 yt-dlp extractor_args；未配置时返回 None。"""
+        if not self.pot_provider_url:
+            return None
+        return {
+            "youtubepot-bgutilhttp": {
+                "base_url": [self.pot_provider_url],
+            }
         }
 
     # ------------------------------------------------------------------
@@ -812,6 +842,13 @@ class DownloadManager:
             # 若已导入 Cookie，则附加 cookiefile（用于登录站点/绕过限制）
             if self.cookie_ready():
                 opts["cookiefile"] = str(self.cookie_file)
+
+            # PO Token provider 的地址由环境变量提供；未配置时不覆盖插件自身的
+            # 默认 127.0.0.1:4416（裸 docker run 没 sidecar 时插件会记录一条
+            # provider 不可用日志，但普通下载仍可继续）。
+            pot_args = self._pot_extractor_args()
+            if pot_args:
+                opts["extractor_args"] = pot_args
 
             # 若已配置代理，则让 yt-dlp 的所有出站请求走代理（国内访问 YouTube 必需）
             proxy = self.proxy

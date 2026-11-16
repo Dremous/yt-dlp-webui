@@ -144,6 +144,12 @@ RUN pip install --no-cache-dir --upgrade \
 RUN pip install --no-cache-dir --upgrade yt-dlp-ejs \
     && python -c "import yt_dlp_ejs" && echo "yt-dlp-ejs OK"
 
+# bgutil PO Token provider 插件：只负责从 sidecar 获取 PO Token，不内置生成器。
+# 版本与 docker-compose.yml 的 bgutil-provider 镜像锁定为同一版本，避免协议漂移。
+RUN pip install --no-cache-dir --upgrade bgutil-ytdlp-pot-provider==2.0.2 \
+    && python -c "import yt_dlp_plugins.extractor.getpot_bgutil" \
+    && echo "bgutil-ytdlp-pot-provider OK"
+
 # 后端代码 + 构建好的前端产物
 COPY app ./app
 COPY --from=web-builder /app/app/static ./app/static

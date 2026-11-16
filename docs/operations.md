@@ -114,6 +114,8 @@ python -m unittest discover -s tests -v
 | `DOWNLOAD_DIR` | `/downloads` | 下载文件存放目录 |
 | `COOKIE_FILE` | `/config/cookies.txt` | Cookie 文件路径 |
 | `PROXY_FILE` | `/config/proxy.txt` | 代理地址文件路径（一行 URL，由界面写入） |
+| `POT_PROVIDER_URL` | 空 | bgutil PO Token provider 地址；compose 默认设为 `http://bgutil-provider:4416`，空值表示不显式指定 |
+| `BGUTIL_VERSION` | `2.0.2` | compose 中 `bgutil-provider` 镜像版本；需与镜像内插件版本一致 |
 | `HTTP_CHUNK_SIZE` | `512M` | 单块大小，支持 `512M` / `1024K` / 字节数；`0` = 不分块 |
 | `TASKS_DB` | `<COOKIE_FILE 所在目录>/tasks.db` | 任务记录库（SQLite）路径，默认与 Cookie 同卷；库不可写时删除会写同名 `.deleted` 墓碑 |
 | `ACCESS_LOG_QUIET` | `1` | 置 `0` 恢复每条请求的 access log；默认静音成功的 `/api/tasks`、`/api/files` 轮询与 `/api/formats` 健康检查 |

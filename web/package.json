@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/lib/taskDisplay.test.js"
+    "test": "node --test src/lib/taskDisplay.test.js src/lib/cookieDisplay.test.js"
   },
   "dependencies": {
     "@heroui/react": "^2.6.11",

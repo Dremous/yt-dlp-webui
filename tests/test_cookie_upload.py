@@ -287,6 +287,25 @@ class MainRoutesTest(unittest.TestCase):
         self.assertNotIn('"domain"', saved)
         main._validate_netscape_cookie_text(saved)
 
+    def test_cookie_status_exposes_expiry_without_cookie_values(self):
+        self.addCleanup(main.manager.remove_cookie)
+        main.manager.save_cookie(
+            (
+                "# Netscape HTTP Cookie File\n"
+                ".example.com\tTRUE\t/\tTRUE\t0\tSID\tsecret-cookie-value\n"
+            ).encode("utf-8")
+        )
+
+        response = self.client.get("/api/cookies/status")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["active"])
+        self.assertEqual(data["cookie_count"], 1)
+        self.assertEqual(data["auth_cookie_count"], 1)
+        self.assertEqual(data["expiry_state"], "session")
+        self.assertNotIn("secret-cookie-value", json.dumps(data))
+
     def test_mutation_requires_x_webui_request_header(self):
         client = TestClient(main.app, raise_server_exceptions=False)
         response = client.post("/api/tasks/cleanup")

@@ -18,7 +18,7 @@ export default function App() {
   // 已结束任务的全量计数（后端统计，不受列表 limit 影响）
   const [taskEnded, setTaskEnded] = useState(0);
   const [files, setFiles] = useState([]);
-  const [cookieOn, setCookieOn] = useState(false);
+  const [cookie, setCookie] = useState({ active: false });
   const [proxy, setProxy] = useState({ active: false, url: "", hasCredentials: false });
   const [about, setAbout] = useState(null);
 
@@ -28,13 +28,17 @@ export default function App() {
   const tasksSeq = useRef(0);
   const filesSeq = useRef(0);
 
+  const refreshCookie = useCallback(() => {
+    api
+      .cookieStatus()
+      .then(setCookie)
+      .catch((e) => console.warn("加载 Cookie 状态失败", e));
+  }, []);
+
   // 加载格式、Cookie 状态、代理状态、应用信息
   useEffect(() => {
     api.formats().then(setFormats).catch((e) => console.warn("加载格式失败", e));
-    api
-      .cookieStatus()
-      .then((s) => setCookieOn(!!s.active))
-      .catch((e) => console.warn("加载 Cookie 状态失败", e));
+    refreshCookie();
     api
       .proxyStatus()
       .then((s) => setProxy({
@@ -44,7 +48,7 @@ export default function App() {
       }))
       .catch((e) => console.warn("加载代理状态失败", e));
     api.about().then(setAbout).catch((e) => console.warn("加载关于信息失败", e));
-  }, []);
+  }, [refreshCookie]);
 
   const refreshTasks = useCallback(() => {
     const seq = ++tasksSeq.current;
@@ -135,7 +139,7 @@ export default function App() {
       </motion.div>
 
       <motion.div variants={cardItem} className="mt-4">
-        <CookiePanel active={cookieOn} onChanged={setCookieOn} />
+        <CookiePanel cookie={cookie} onChanged={refreshCookie} />
       </motion.div>
 
       <motion.div variants={cardItem} className="mt-4">

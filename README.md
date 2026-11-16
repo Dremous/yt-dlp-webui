@@ -54,6 +54,7 @@ nX.Y 分支，并保留 MP4 合并、MP3 转码、PUID/PGID、TZ 与 YouTube EJS
 - **并发与续传**：最多 5 个任务并发；网络中断自动重试续传，失败后重新提交同一链接会接管上次的 `.part`
 - **任务持久化**：记录写入 SQLite，容器重启后仍在；任务库损坏自动隔离，路径不可写时降级为不持久化
 - **国内网络友好**：代理一键测试、`socks5h` 处理、内置 deno + `yt-dlp-ejs` 解 YouTube JS 挑战
+- **PO Token sidecar**：compose 内置 `bgutil-provider`，补 YouTube 高画质/风控场景的 PO Token；Cookie 状态会提示过期与即将过期
 - **失败可诊断**：失败日志脱敏落盘，最后 30 行同步到 `docker logs`，界面显示关键错误行
 
 ## 安全提示

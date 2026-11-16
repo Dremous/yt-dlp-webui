@@ -178,6 +178,23 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertIn("BtbN/FFmpeg-Builds", content)
         self.assertNotIn("ffmpeg.org/releases", content)
 
+    def test_dockerfile_installs_bgutil_pot_provider_plugin(self):
+        content = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        # 插件只负责向 sidecar 取 token；版本与 compose 的 provider 镜像一起锁定，
+        # 避免插件和 provider 的协议大版本漂移。
+        self.assertIn("bgutil-ytdlp-pot-provider==2.0.2", content)
+        self.assertIn("import yt_dlp_plugins.extractor.getpot_bgutil", content)
+
+    def test_compose_runs_pot_sidecar_and_points_webui_at_it(self):
+        content = (self.root / "docker-compose.yml").read_text(encoding="utf-8")
+        self.assertIn("bgutil-provider:", content)
+        self.assertIn(
+            "brainicism/bgutil-ytdlp-pot-provider:${BGUTIL_VERSION:-2.0.2}",
+            content,
+        )
+        self.assertIn("POT_PROVIDER_URL=http://bgutil-provider:4416", content)
+        self.assertIn('expose:\n      - "4416"', content)
+
     def test_workflow_resolves_latest_stable_btbn_gpl_build(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"

@@ -39,7 +39,32 @@
 | 连接被拒绝 | 地址/端口写错，或代理没在监听该端口 |
 | 连接超时 | 代理未开启「允许局域网连接」，或防火墙拦了端口 |
 | SOCKS 代理不可用 | `socks5` / `socks5h` 需要 PySocks，官方镜像已内置；自建环境请 `pip install PySocks` |
-| 连通正常但下载仍失败 | 目标站点本身需要登录凭证，见下一节的 Cookie |
+| 连通正常但下载仍失败 | 目标站点本身需要登录凭证，见下一节的 Cookie；YouTube 高画质还可能需要 PO Token |
+
+## PO Token（YouTube 高画质 / bot 校验）
+
+YouTube 的高码率/video-only 流有时会要求 PO Token；只有 Cookie 不一定够。
+`docker-compose.yml` 已内置一个可选的 `bgutil-provider` sidecar：
+
+- 主镜像安装了 `bgutil-ytdlp-pot-provider` 插件；
+- `bgutil-provider` 只暴露在 compose 内部网络，不映射宿主机端口；
+- WebUI 通过 `POT_PROVIDER_URL=http://bgutil-provider:4416` 把地址交给 yt-dlp。
+
+启动：
+
+```bash
+docker compose up -d
+```
+
+如果代理装在宿主机，compose 已经给两个容器都加了
+`host.docker.internal`；代理地址仍填 `http://host.docker.internal:7890`。
+provider 生成 token 时会沿用 WebUI 传给 yt-dlp 的代理，不需要在 provider 容器里
+再配置一遍代理。
+
+只使用 `docker run` 的快速启动命令没有 sidecar；这时插件会尝试默认的
+`127.0.0.1:4416` 并记录一条 provider 不可用的日志，但不会阻止普通下载。
+需要 PO Token 时请用 compose，或自行用同一网络启动
+`brainicism/bgutil-ytdlp-pot-provider` 并设置 `POT_PROVIDER_URL`。
 
 ## 登录 Cookie
 
@@ -50,3 +75,15 @@
 
 支持格式：Netscape `cookies.txt`，或浏览器插件导出的 JSON（上传后会转换成 Netscape
 格式保存；yt-dlp 的 `cookiefile` 本身只读取 Netscape）。
+
+### Cookie 会过期
+
+YouTube 的会话 Cookie 会轮换，服务端也可能提前吊销；导出的文件不会自动续期。
+WebUI 的状态接口会统计 Netscape 的 `expires` 字段：
+
+- 有已过期 Cookie：状态胶囊变红，提示重新导出并导入；
+- 7 天内到期：状态胶囊变黄，显示最近过期日期；
+- 只有会话 Cookie（`expires=0`）：提示关闭浏览器或退出登录后可能失效。
+
+这只是文件元数据提示，不能证明 Cookie 当前仍被站点接受。如果刚导入就遇到
+`403` 或 `Sign in to confirm you're not a bot`，优先检查代理 IP 和 PO Token。

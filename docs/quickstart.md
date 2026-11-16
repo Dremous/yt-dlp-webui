@@ -59,6 +59,10 @@ docker run -d --name yt-dlp-webui \
 
 打开 [http://localhost:8080](http://localhost:8080)，粘贴链接即可下载。
 
+> 这条单容器命令不带 PO Token sidecar。YouTube 高画质遇到 `403` 或 bot 校验时，
+> 请改用下面的 Docker Compose；compose 会自动启动 `bgutil-provider` 并把地址传给 WebUI。
+> 详见 [代理与 Cookie](network.md)。
+
 容器默认时区为 `Asia/Shanghai`；需要其他时区时加 `-e TZ=Asia/Tokyo`（使用 IANA 时区名）。
 
 ### 镜像标签

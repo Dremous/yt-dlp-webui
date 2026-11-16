@@ -15,7 +15,7 @@
 | GET | `/files/{filename:path}` | 下载指定文件（相对路径，含任务子目录） |
 | DELETE | `/api/files/{filename:path}` | 删除指定文件 |
 | POST | `/api/cookies` | 上传 Cookie 文件（multipart，字段 `file`；上限 5MB，超出返回 413） |
-| GET | `/api/cookies/status` | 查询 Cookie 状态 |
+| GET | `/api/cookies/status` | 查询 Cookie 状态；`active=false` 表示未导入，导入后额外返回 `cookie_count`、`auth_cookie_count`、`expired_count`、`nearest_expiry`、`expiry_state` 等过期提醒字段（不回传 Cookie 值） |
 | DELETE | `/api/cookies` | 清除 Cookie |
 | GET | `/api/proxy` | 查询代理状态；`url` 已脱敏（如 `http://***@host:7890`），并返回 `has_credentials` |
 | PUT | `/api/proxy` | 保存代理，body: `{"url": "http://host.docker.internal:7890"}`；响应同样只返回脱敏地址 |

@@ -16,12 +16,15 @@ import {
 } from "@heroui/react";
 import { Cookie, Trash, UploadSimple } from "@phosphor-icons/react";
 import { api } from "../api.js";
+import { getCookieDisplay } from "../lib/cookieDisplay.js";
 
-export default function CookiePanel({ active, onChanged }) {
+export default function CookiePanel({ cookie, onChanged }) {
   const inputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
+  const display = getCookieDisplay(cookie);
+  const active = !!cookie?.active;
 
   function pickFile() {
     if (inputRef.current) inputRef.current.click();
@@ -34,7 +37,7 @@ export default function CookiePanel({ active, onChanged }) {
     setUploading(true);
     try {
       await api.uploadCookie(file);
-      onChanged(true);
+      onChanged();
       addToast({
         title: "Cookie 已导入",
         description: "将用于之后的下载请求",
@@ -51,7 +54,7 @@ export default function CookiePanel({ active, onChanged }) {
     setBusy(true);
     try {
       await api.deleteCookie();
-      onChanged(false);
+      onChanged();
       addToast({ title: "Cookie 已清除", color: "success" });
     } catch {
       addToast({ title: "清除失败", description: "请重试", color: "danger" });
@@ -70,19 +73,23 @@ export default function CookiePanel({ active, onChanged }) {
         <Chip
           size="sm"
           variant="flat"
-          color={active ? "success" : "default"}
+          color={display.color}
           startContent={
             <span
-              className={
-                active
-                  ? "w-1.5 h-1.5 rounded-full bg-emerald-400"
-                  : "w-1.5 h-1.5 rounded-full bg-slate-500"
-              }
+              className={`w-1.5 h-1.5 rounded-full ${
+                display.color === "danger"
+                  ? "bg-rose-400"
+                  : display.color === "warning"
+                    ? "bg-amber-400"
+                    : display.color === "success"
+                      ? "bg-emerald-400"
+                      : "bg-slate-500"
+              }`}
               aria-hidden="true"
             />
           }
         >
-          {active ? "已导入" : "未导入"}
+          {display.label}
         </Chip>
       </CardHeader>
       <CardBody className="px-5 pb-5">
@@ -130,6 +137,17 @@ export default function CookiePanel({ active, onChanged }) {
             支持 Netscape cookies.txt，也兼容浏览器 JSON（上传后转换为 Netscape）
           </span>
         </div>
+        <p
+          className={`mt-2 text-xs ${
+            display.color === "danger"
+              ? "text-rose-300"
+              : display.color === "warning"
+                ? "text-amber-300"
+                : "text-slate-500"
+          }`}
+        >
+          {display.description}
+        </p>
 
         {/* 清除二次确认：替换原生 window.confirm */}
         <Modal isOpen={isOpen} onOpenChange={onOpenChange} backdrop="blur">
