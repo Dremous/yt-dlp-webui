@@ -3,12 +3,11 @@
 #
 # 阶段一：构建 HeroUI 前端（node 构建产物输出到 app/static）
 # 阶段二：取 JavaScript 运行时（deno，供 yt-dlp 的 EJS 使用）
-# 阶段三：下载 BtbN GPL 静态 ffmpeg（仅 slim 变体使用）
+# 阶段三：下载 BtbN GPL 静态 ffmpeg（唯一发布变体使用）
 # 阶段四：后端运行时公共层（python + deno + 静态前端，不含 ffmpeg）
-# 阶段五：slim（静态 ffmpeg）
-# 阶段六：latest（apt ffmpeg，保持原有行为；作为默认 target 放在最后）
+# 阶段五：latest（BtbN GPL 静态 ffmpeg；唯一发布变体）
 #
-# 默认 build target 是最后一个阶段 latest；slim 必须显式 --target slim。
+# 默认 build target 是最后一个阶段 latest。
 # ==========================================================================
 
 # 必须在第一个 FROM 之前声明：只有全局作用域的 ARG 才能参与 FROM 的变量替换。
@@ -37,7 +36,7 @@ RUN npm run build
 # 多架构构建时按目标平台自动选对应架构的二进制（amd64 / arm64 均有）。
 FROM denoland/deno:bin-${DENO_VERSION} AS deno-bin
 
-# ---------- 阶段三：BtbN GPL 静态 ffmpeg（仅 slim 使用） ----------
+# ---------- 阶段三：BtbN GPL 静态 ffmpeg（唯一发布变体使用） ----------
 # BtbN/FFmpeg-Builds 的 GPL 构建把 FFmpeg 库静态编进 ffmpeg/ffprobe，运行时
 # 只依赖 Debian 自带的 glibc。CI 每次构建会解析 latest release 中最高版本的
 # nX.Y 稳定分支资产；FFMPEG_BUILDS_REFRESH 用 run id 强制刷新，避免 Docker
@@ -97,7 +96,7 @@ ENV PUID=10001 \
 ENV TZ=Asia/Shanghai
 
 # gosu：入口脚本降权用；tzdata：提供 /usr/share/zoneinfo，供 TZ 变量解析时区。
-# ffmpeg 不在这里安装：latest 在最终阶段走 apt，slim 复制静态二进制。
+# ffmpeg 不在这里安装：最终 latest 阶段从 ffmpeg-static 复制静态二进制。
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         gosu \
         tzdata \
@@ -157,11 +156,11 @@ VOLUME /downloads /config
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python", "-m", "app.serve"]
 
-# ---------- 阶段五：slim（BtbN GPL ffmpeg） ----------
+# ---------- 阶段五：latest（BtbN GPL ffmpeg，唯一发布变体） ----------
 # 复制 BtbN 的 ffmpeg/ffprobe 和随包 LICENSE.txt；ffmpeg 与 ffprobe 都保留，
 # 避免 yt-dlp 的音频探测和元数据能力出现回归。构建期执行 --version，
 # 错架构/缺 glibc 依赖会立即失败。
-FROM runtime AS slim-base
+FROM runtime AS latest-base
 RUN mkdir -p /usr/share/doc/ffmpeg
 COPY --from=ffmpeg-static /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg-static /opt/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe
@@ -171,20 +170,8 @@ RUN ffmpeg -version >/dev/null && ffprobe -version >/dev/null
 
 # 版本号单独放最终元数据阶段：如果和静态二进制放同一阶段，APP_VERSION 每次
 # 构建都会变，BuildKit 会把这一阶段的重活一起判为 cache miss。最终阶段只写
-# ENV，不复制/安装任何东西。
-FROM slim-base AS slim
-ARG APP_VERSION=dev
-ENV APP_VERSION=${APP_VERSION}
-
-# ---------- 阶段六：latest（apt ffmpeg，保持原有行为） ----------
-# 必须放在最后：docker build 不带 --target 时默认构建最后一个阶段，
-# 因此现有 `docker build` / CI 的默认产物仍然是 latest。
-FROM runtime AS latest-base
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-# latest 的版本号同样放在独立的最终元数据阶段，理由见 slim。
+# ENV，不复制/安装任何东西。latest 放在最后，docker build 不带 --target 时
+# 默认构建它。
 FROM latest-base AS latest
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
