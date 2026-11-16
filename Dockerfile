@@ -44,6 +44,8 @@ FROM denoland/deno:bin-${DENO_VERSION} AS deno-bin
 FROM debian:bookworm-slim AS ffmpeg-static
 ARG TARGETARCH
 ARG FFMPEG_BUILDS_VERSION=9.0
+ARG FFMPEG_BUILDS_SHA256_AMD64=
+ARG FFMPEG_BUILDS_SHA256_ARM64=
 ARG FFMPEG_BUILDS_REFRESH=local
 
 RUN apt-get update \
@@ -56,18 +58,25 @@ RUN apt-get update \
 RUN set -eux; \
     echo "BtbN GPL ffmpeg refresh: ${FFMPEG_BUILDS_REFRESH}"; \
     case "${TARGETARCH}" in \
-      amd64) ARCH=linux64 ;; \
-      arm64) ARCH=linuxarm64 ;; \
+      amd64) ARCH=linux64; SHA256="${FFMPEG_BUILDS_SHA256_AMD64}" ;; \
+      arm64) ARCH=linuxarm64; SHA256="${FFMPEG_BUILDS_SHA256_ARM64}" ;; \
       *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     ASSET="ffmpeg-n${FFMPEG_BUILDS_VERSION}-latest-${ARCH}-gpl-${FFMPEG_BUILDS_VERSION}.tar.xz"; \
     mkdir -p /opt/ffmpeg; \
     curl -fL --retry 3 --retry-delay 5 -o "/tmp/${ASSET}" \
       "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${ASSET}"; \
+    if [ -n "${SHA256}" ]; then \
+      echo "${SHA256}  /tmp/${ASSET}" | sha256sum -c -; \
+    else \
+      echo "WARNING: no sha256 for ${ASSET}; local build without checksum" >&2; \
+    fi; \
     tar -xJf "/tmp/${ASSET}" --strip-components=1 -C /opt/ffmpeg; \
     rm -f "/tmp/${ASSET}"; \
     /opt/ffmpeg/bin/ffmpeg -version > /opt/ffmpeg/version.txt; \
     /opt/ffmpeg/bin/ffprobe -version >> /opt/ffmpeg/version.txt; \
+    printf 'FFmpeg corresponding source: https://github.com/FFmpeg/FFmpeg (exact commit is in version.txt)\nFFmpeg release tarball: https://ffmpeg.org/releases/ffmpeg-%s.tar.xz\nBtbN build scripts: https://github.com/BtbN/FFmpeg-Builds\n' \
+      "${FFMPEG_BUILDS_VERSION}" > /opt/ffmpeg/SOURCE.txt; \
     cat /opt/ffmpeg/version.txt
 
 # ---------- 阶段四：后端运行时公共层 ----------
@@ -165,13 +174,13 @@ RUN mkdir -p /usr/share/doc/ffmpeg
 COPY --from=ffmpeg-static /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg-static /opt/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe
 COPY --from=ffmpeg-static /opt/ffmpeg/LICENSE.txt /usr/share/doc/ffmpeg/LICENSE
+COPY --from=ffmpeg-static /opt/ffmpeg/SOURCE.txt /usr/share/doc/ffmpeg/SOURCE.txt
 COPY --from=ffmpeg-static /opt/ffmpeg/version.txt /usr/share/doc/ffmpeg/version.txt
 RUN ffmpeg -version >/dev/null && ffprobe -version >/dev/null
 
-# 版本号单独放最终元数据阶段：如果和静态二进制放同一阶段，APP_VERSION 每次
-# 构建都会变，BuildKit 会把这一阶段的重活一起判为 cache miss。最终阶段只写
-# ENV，不复制/安装任何东西。latest 放在最后，docker build 不带 --target 时
-# 默认构建它。
+# 版本号单独放最终元数据阶段：APP_VERSION 每次构建都会变，放在最终阶段只影响
+# 纯 ENV 层，不把版本号变化扩散到 latest-base。latest 放在最后，docker build
+# 不带 --target 时默认构建它。
 FROM latest-base AS latest
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
