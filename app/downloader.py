@@ -23,7 +23,7 @@ from typing import Dict, List, Optional
 import yt_dlp
 
 from .store import TaskStore
-from .tasklog import TaskLogger
+from .tasklog import TaskLogger, redact
 
 log = logging.getLogger(__name__)
 
@@ -219,6 +219,29 @@ def normalize_proxy(url: str) -> str:
     return raw
 
 
+def mask_proxy_url(url: str) -> tuple[str, bool]:
+    """把代理 URL 中的 userinfo 换成 ***，返回 (展示地址, 是否含凭证)。
+
+    代理状态接口必须使用这个函数：页面只需要知道“配了哪个主机/端口”，
+    不需要把 user:password 再回传给浏览器。真实地址仍只保存在 0600 的配置文件里。
+    """
+    parsed = urllib.parse.urlparse(url)
+    has_credentials = bool(parsed.username or parsed.password)
+    if not has_credentials:
+        return url, False
+    host = parsed.hostname or ""
+    if ":" in host:  # IPv6 放进 netloc 时需要方括号
+        host = f"[{host}]"
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    netloc = f"***@{host}"
+    if port is not None:
+        netloc += f":{port}"
+    return parsed._replace(netloc=netloc).geturl(), True
+
+
 class DownloadCancelled(Exception):
     """下载被用户主动取消（或排队超限被清理）时抛出的内部信号。"""
 
@@ -358,11 +381,20 @@ class DownloadManager:
             return self._proxy
 
     def proxy_status(self) -> dict:
-        """返回代理状态，供前端展示。"""
+        """返回代理状态，供前端展示。
+
+        只返回主机/端口等展示信息；userinfo 用 *** 替换，避免接口把代理密码
+        原样回传给浏览器。需要修改凭证时，前端应要求重新输入完整地址。
+        """
         proxy = self.proxy
         if not proxy:
-            return {"active": False, "url": None}
-        return {"active": True, "url": proxy}
+            return {"active": False, "url": None, "has_credentials": False}
+        display_url, has_credentials = mask_proxy_url(proxy)
+        return {
+            "active": True,
+            "url": display_url,
+            "has_credentials": has_credentials,
+        }
 
     def save_proxy(self, url: str) -> str:
         """保存代理地址并立即生效，返回规范化后的地址。
@@ -903,8 +935,9 @@ class DownloadManager:
                       file=sys.stderr)
                 print("\n".join(tail), file=sys.stderr)
 
-        # 前端把 error 渲染在单个 <p> 里，\n 会折叠成空格，所以只给一行摘要
-        summary = (task_logger.error_summary() or str(exc))[:400]
+        # 前端把 error 渲染在单个 <p> 里，\n 会折叠成空格，所以只给一行摘要。
+        # 统一走 redact：即使 yt-dlp 抛出的异常里带 user:password，也不能进前端/任务库。
+        summary = redact(task_logger.error_summary() or str(exc))[:400]
         return f"{summary}｜完整日志：{log_rel}" if log_rel else summary
 
     def _hook(self, data: dict, task: DownloadTask) -> None:
