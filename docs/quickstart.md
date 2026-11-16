@@ -75,10 +75,10 @@ docker run -d --name yt-dlp-webui \
   ghcr.io/dremous/yt-dlp-webui:slim
 ```
 
-slim 用最新稳定版的静态 ffmpeg/ffprobe 替代 Debian apt 的 ffmpeg，避免引入
+slim 用 BtbN 的 GPL 静态 ffmpeg 构建替代 Debian apt 的 ffmpeg，避免引入
 Mesa/LLVM 等桌面图形栈依赖；MP4 合并、MP3 转码、PUID/PGID、TZ 与 YouTube EJS
-都保留。CI 每次构建会解析 `mwader/static-ffmpeg` 的最新稳定 tag，镜像体积仍小于
-latest，但会随上游二进制大小变化。需要 Debian 发行版 ffmpeg 的完整编解码组合时
+都保留。CI 每次构建会解析 BtbN `latest` release 中最新的 nX.Y 稳定分支，镜像体积
+仍小于 latest，但会随上游资产大小变化。需要 Debian 发行版 ffmpeg 的完整编解码组合时
 继续用 latest。
 
 Compose 默认仍是 latest；临时切换 slim：
@@ -123,7 +123,8 @@ docker build --target slim -t yt-dlp-webui:slim .  # 可选：静态 ffmpeg 的�
 ```
 
 构建会现场编译前端、拉取最新 yt-dlp nightly 与 deno 二进制，耗时几分钟。
-slim 目标还会从 Docker Hub 拉取最新稳定 tag 的静态 ffmpeg/ffprobe。
+slim 目标还会从 BtbN 的 `latest` release 下载当前 fallback 版本（9.0）的 GPL
+静态 ffmpeg/ffprobe；CI 构建则会解析最新的 nX.Y 稳定分支。
 
 ## 工作原理
 
@@ -140,5 +141,5 @@ slim 目标还会从 Docker Hub 拉取最新稳定 tag 的静态 ffmpeg/ffprobe�
 | 前端 | React 18 + HeroUI + Tailwind CSS + Vite |
 | 后端 | Python 3.13 + FastAPI + Uvicorn |
 | 下载引擎 | yt-dlp（nightly，Python API）+ deno（EJS 挑战求解） |
-| 容器 | 多阶段镜像（node 构建前端 → deno 运行时 → python 运行）；latest 用 apt ffmpeg，slim 用静态 ffmpeg |
+| 容器 | 多阶段镜像（node 构建前端 → deno 运行时 → python 运行）；latest 用 apt ffmpeg，slim 用 BtbN GPL ffmpeg |
 | CI | GitHub Actions 定时构建，推送 GHCR（amd64 + arm64） |

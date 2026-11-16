@@ -37,8 +37,9 @@ docker run -d --name yt-dlp-webui \
 
 打开 [http://localhost:8080](http://localhost:8080)，粘贴链接即可下载。
 
-如果更在意镜像体积，可以把最后的 `:latest` 换成 `:slim`。slim 使用最新稳定版的静态 ffmpeg，
-保留 MP4 合并、MP3 转码、PUID/PGID、TZ 与 YouTube EJS，镜像仍比 latest 小：
+如果更在意镜像体积，可以把最后的 `:latest` 换成 `:slim`。slim 使用 BtbN 的 GPL 静态 ffmpeg
+构建，CI 每次会解析其最新稳定的 nX.Y 分支，保留 MP4 合并、MP3 转码、PUID/PGID、TZ 与 YouTube EJS，
+镜像仍比 latest 小：
 
 ```bash
 docker run -d --name yt-dlp-webui \
