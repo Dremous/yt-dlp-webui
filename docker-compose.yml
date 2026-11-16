@@ -1,7 +1,7 @@
 services:
   yt-dlp-webui:
     container_name: yt-dlp-webui
-    # 默认仍用 latest；想换瘦身版可设置 IMAGE_TAG=slim 后 docker compose up -d。
+    # 默认使用 latest；需要固定构建时可设置 IMAGE_TAG=DATE-SHORT_SHA。
     image: ghcr.io/dremous/yt-dlp-webui:${IMAGE_TAG:-latest}
     ports:
       # BIND_ADDR 控制系统对外绑定的网卡：默认 0.0.0.0 保持现有局域网访问；
