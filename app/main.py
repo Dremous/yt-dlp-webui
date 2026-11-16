@@ -16,13 +16,14 @@
 - PUT  /api/proxy     保存代理地址
 - DELETE /api/proxy   清除代理
 - POST /api/proxy/test 探测代理能否连通 YouTube
-- GET  /api/about     应用信息（版本 / yt-dlp 版本 / 作者）
+- GET  /api/about     应用信息（版本 / ffmpeg 版本 / yt-dlp 版本 / 作者）
 - 静态前端挂载在 /
 """
 
 import json
 import logging
 import os
+import subprocess
 import time
 import urllib.parse
 from pathlib import Path
@@ -64,8 +65,8 @@ setup_logging()
 # 下载目录、Cookie 文件与代理配置（容器内可通过环境变量覆盖）
 # ---------------------------------------------------------------------------
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
-COOKIE_FILE = os.environ.get("COOKIE_FILE", "/config/cookies.txt")
-PROXY_FILE = os.environ.get("PROXY_FILE", "/config/proxy.txt")
+COOKIE_FILE = Path(os.environ.get("COOKIE_FILE", "/config/cookies.txt"))
+PROXY_FILE = Path(os.environ.get("PROXY_FILE", "/config/proxy.txt"))
 # 任务记录库：默认与 Cookie 同卷（配置卷小且必须持久），可用 TASKS_DB 单独指定
 TASKS_DB = os.environ.get("TASKS_DB") or str(Path(COOKIE_FILE).parent / "tasks.db")
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -448,11 +449,48 @@ def test_proxy(req: Optional[ProxyTestRequest] = None):
 # ---------------------------------------------------------------------------
 # 应用信息（「关于」界面数据来源）
 # ---------------------------------------------------------------------------
+def parse_ffmpeg_version(output: str) -> str:
+    """从 `ffmpeg -version` 输出中提取构建版本号。
+
+    第一行形如：
+    ffmpeg version n9.0.2-57-gd838f9f9ae-20261115 Copyright (c) ...
+    只取 version 与 Copyright 之间的构建标识；解析失败时返回“不可用”。
+    """
+    for line in output.splitlines():
+        line = line.strip()
+        prefix = "ffmpeg version "
+        if not line.startswith(prefix):
+            continue
+        version = line[len(prefix):]
+        if " Copyright " in version:
+            version = version.split(" Copyright ", 1)[0]
+        return version.strip() or "不可用"
+    return "不可用"
+
+
+def _ffmpeg_version() -> str:
+    """运行 ffmpeg 读取实际构建版本；本地未安装时返回“不可用”。"""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "不可用"
+    if result.returncode != 0:
+        return "不可用"
+    return parse_ffmpeg_version(result.stdout or "")
+
+
 @app.get("/api/about")
 def about():
     return {
         "name": "yt-dlp WebUI",
         "version": APP_VERSION,                    # 镜像标签版本（如 20261016-abc1234）
+        "ffmpeg_version": _ffmpeg_version(),       # slim/latest 内的实际 ffmpeg 构建版本
         "yt_dlp_version": yt_dlp.version.__version__,
         "author": "Dremous",
         "repo": "https://github.com/Dremous/yt-dlp-webui",
