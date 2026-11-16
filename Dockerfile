@@ -42,10 +42,6 @@ ENV PYTHONUNBUFFERED=1 \
     PROXY_FILE=/config/proxy.txt \
     DENO_NO_UPDATE_CHECK=1
 
-# 镜像标签版本（构建时由 workflow 注入 DATE-SHORT_SHA），供「关于」界面显示
-ARG APP_VERSION=dev
-ENV APP_VERSION=${APP_VERSION}
-
 # 运行日志落盘位置（/config 是持久卷）；置 none 则只走 docker logs
 ENV LOG_FILE=/config/webui.log
 
@@ -83,6 +79,12 @@ RUN pip install --no-cache-dir --upgrade yt-dlp-ejs \
 # 后端代码 + 构建好的前端产物
 COPY app ./app
 COPY --from=web-builder /app/app/static ./app/static
+
+# 镜像标签版本（构建时由 workflow 注入 DATE-SHORT_SHA），供「关于」界面显示。
+# 注意：ARG/ENV 必须放在所有重量级依赖安装之后。这个值每次构建都会变化，
+# 如果放在顶部，会让后续 apt / pip / npm 层全部失效，GHA 缓存几乎无法命中。
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
 
 # 端口由运行时 PORT 决定，不写静态 EXPOSE（写死 8080 会与自定义 PORT 不一致）。
 # 发布端口请使用 `docker run -p 8080:8080` 或 compose 的 ports 映射。

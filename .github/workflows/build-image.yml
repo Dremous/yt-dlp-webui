@@ -18,6 +18,11 @@ jobs:
       contents: read
       packages: write                  # 允许推送 GHCR 包
 
+    # 同一分支/标签只保留最新一次构建，避免并发构建互相覆盖缓存
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,9 +56,10 @@ jobs:
           # 将镜像标签版本（DATE-SHORT_SHA）烤入镜像，供「关于」界面显示
           build-args: |
             APP_VERSION=${{ steps.image.outputs.DATE }}-${{ steps.image.outputs.SHORT_SHA }}
-          # GitHub Actions 缓存，避免每次全量构建
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # GitHub Actions 缓存：固定 scope，避免与默认 buildkit scope 混用；
+          # ignore-error：缓存超过仓库配额导致导出失败时不阻断镜像发布。
+          cache-from: type=gha,scope=yt-dlp-webui
+          cache-to: type=gha,mode=max,scope=yt-dlp-webui,ignore-error=true
           tags: |
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:latest
             ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ steps.image.outputs.DATE }}

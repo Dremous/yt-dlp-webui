@@ -24,6 +24,31 @@ class DockerfilePortTest(unittest.TestCase):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
         self.assertNotIn("EXPOSE 8080", content)
 
+    def test_app_version_is_injected_after_dependency_layers(self):
+        """版本号每次构建都会变，放在顶部会让 apt/pip/npm 缓存全部失效。"""
+        content = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        version_at = content.index("ARG APP_VERSION=dev")
+        self.assertGreater(
+            version_at,
+            content.index("RUN pip install --no-cache-dir -r requirements.txt"),
+        )
+        self.assertGreater(version_at, content.index("COPY app ./app"))
+        self.assertLess(version_at, content.index("HEALTHCHECK"))
+
+    def test_runtime_stage_is_not_duplicated(self):
+        content = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        self.assertEqual(content.count("FROM python:3.13-slim"), 1)
+
+    def test_workflow_uses_stable_gha_cache_scope(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("cache-from: type=gha,scope=yt-dlp-webui", content)
+        self.assertIn(
+            "cache-to: type=gha,mode=max,scope=yt-dlp-webui,ignore-error=true",
+            content,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
