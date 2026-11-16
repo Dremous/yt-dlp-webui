@@ -61,10 +61,22 @@ class ProgressHookTest(unittest.TestCase):
     def test_postprocessing_stage_is_exposed(self):
         # 合并音视频时下载已经结束，但任务还没 finished：没有阶段提示就会
         # 一直显示「下载中 + 100%」的流光，看起来像卡住了
-        self.mgr._hook({"status": "started", "postprocessor": "Merger"}, self.task)
-        self.assertIn("合并", self.task.stage)
-        self.mgr._hook({"status": "finished", "postprocessor": "Merger"}, self.task)
-        self.assertIsNone(self.task.stage)
+        cases = [
+            ("Merger", "合并中"),
+            ("ExtractAudio", "转码中"),
+            ("VideoConvertor", "转码中"),
+            ("Metadata", "后期处理中"),
+        ]
+        for postprocessor, expected in cases:
+            with self.subTest(postprocessor=postprocessor):
+                self.mgr._hook(
+                    {"status": "started", "postprocessor": postprocessor}, self.task
+                )
+                self.assertEqual(self.task.stage, expected)
+                self.mgr._hook(
+                    {"status": "finished", "postprocessor": postprocessor}, self.task
+                )
+                self.assertIsNone(self.task.stage)
 
     def test_finished_stream_clears_live_counters(self):
         self.mgr._hook({"status": "finished", "downloaded_bytes": 800,
