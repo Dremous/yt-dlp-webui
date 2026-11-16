@@ -54,23 +54,34 @@ class DockerfileConfigTest(unittest.TestCase):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
         self.assertNotIn("EXPOSE 8080", content)
 
-    def test_app_version_is_injected_after_dependency_layers(self):
-        """版本号每次构建都会变，放在顶部会让 apt/pip/npm 缓存全部失效。"""
-        instructions = self._instructions(
-            (self.root / "Dockerfile").read_text(encoding="utf-8")
+    def test_app_version_is_injected_only_in_final_stages(self):
+        """版本号每次构建都会变，不能放进公共 runtime，否则两个变体的基座都会变。"""
+        content = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        runtime_body = content.split("FROM python:3.13-slim AS runtime", 1)[1].split(
+            "FROM runtime AS slim", 1
+        )[0]
+        self.assertNotIn("ARG APP_VERSION", runtime_body)
+        self.assertNotIn("ENV APP_VERSION", runtime_body)
+
+        self.assertEqual(content.count("ARG APP_VERSION=dev"), 2)
+        for body in (
+            content.split("FROM runtime AS slim", 1)[1].split("FROM runtime AS latest", 1)[0],
+            content.split("FROM runtime AS latest", 1)[1],
+        ):
+            self.assertIn("ARG APP_VERSION=dev", body)
+            self.assertIn("ENV APP_VERSION=${APP_VERSION}", body)
+        # 最终阶段也必须在重量级操作之后才写版本，避免把 apt / 静态二进制层顶掉。
+        slim_body, latest_body = (
+            content.split("FROM runtime AS slim", 1)[1].split("FROM runtime AS latest", 1)[0],
+            content.split("FROM runtime AS latest", 1)[1],
         )
-        version_at = self._instruction_index(instructions, "ARG APP_VERSION")
         self.assertGreater(
-            version_at,
-            self._instruction_index(
-                instructions, "RUN pip install --no-cache-dir -r requirements.txt"
-            ),
+            slim_body.index("ARG APP_VERSION=dev"),
+            slim_body.index("COPY --from=ffmpeg-static /out/ffprobe /usr/local/bin/ffprobe"),
         )
         self.assertGreater(
-            version_at, self._instruction_index(instructions, "COPY app ./app")
-        )
-        self.assertLess(
-            version_at, self._instruction_index(instructions, "HEALTHCHECK")
+            latest_body.index("ARG APP_VERSION=dev"),
+            latest_body.index("apt-get install -y --no-install-recommends ffmpeg"),
         )
 
     def test_runtime_stage_is_not_duplicated(self):

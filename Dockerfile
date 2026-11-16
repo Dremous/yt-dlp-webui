@@ -165,12 +165,6 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
     && chown -R app:app /app /downloads /config /home/app
 
-# 镜像标签版本（构建时由 workflow 注入 DATE-SHORT_SHA），供「关于」界面显示。
-# 注意：ARG/ENV 必须放在所有重量级依赖安装之后。这个值每次构建都会变化，
-# 如果放在顶部，会让后续 apt / pip / npm 层全部失效，GHA 缓存几乎无法命中。
-ARG APP_VERSION=dev
-ENV APP_VERSION=${APP_VERSION}
-
 # 端口由运行时 PORT 决定，不写静态 EXPOSE（写死 8080 会与自定义 PORT 不一致）。
 # 发布端口请使用 `docker run -p 8080:8080` 或 compose 的 ports 映射。
 
@@ -198,6 +192,12 @@ COPY --from=ffmpeg-static /out/LICENSE /usr/share/doc/ffmpeg/LICENSE
 COPY --from=ffmpeg-static /out/README /usr/share/doc/ffmpeg/README.static
 RUN ffmpeg -version >/dev/null && ffprobe -version >/dev/null
 
+# 镜像标签版本只写在最终阶段：APP_VERSION 每次构建都会变，若放在公共 runtime，
+# 会改变两个变体共同基座的 image config，使下面的最终层（尤其 latest 的 apt ffmpeg）
+# 每次都按 cache miss 重建。放在重量级操作之后，只更新镜像元数据。
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+
 # ---------- 阶段六：latest（apt ffmpeg，保持原有行为） ----------
 # 必须放在最后：docker build 不带 --target 时默认构建最后一个阶段，
 # 因此现有 `docker build` / CI 的默认产物仍然是 latest。
@@ -205,3 +205,7 @@ FROM runtime AS latest
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
+# latest 的版本号同样放在 apt ffmpeg 之后；理由见 slim 阶段。
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
