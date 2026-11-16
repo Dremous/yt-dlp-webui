@@ -25,6 +25,9 @@ jobs:
     permissions:
       contents: read
       packages: write                  # 允许推送 GHCR 包
+    outputs:
+      # smoke 必须验证本次构建的 manifest，而不是可能被别的 ref 覆盖的 latest。
+      digest: ${{ steps.build.outputs.digest }}
 
     steps:
       - name: Checkout
@@ -50,10 +53,15 @@ jobs:
           echo "CACHE_REF=ghcr.io/${IMAGE_NAME}:${CACHE_TAG}" >> "$GITHUB_OUTPUT"
 
           # 单一发布变体：latest 是 BtbN 静态 ffmpeg；日期标签用于固定版本。
+          # latest 只跟随 main，tag / 其他 ref 构建不能覆盖它。
           TAGS="$(printf '%s\n' \
-            "ghcr.io/${IMAGE_NAME}:latest" \
             "ghcr.io/${IMAGE_NAME}:${DATE}" \
             "ghcr.io/${IMAGE_NAME}:${DATE}-${SHORT_SHA}")"
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            TAGS="$(printf '%s\n%s\n' \
+              "ghcr.io/${IMAGE_NAME}:latest" \
+              "$TAGS")"
+          fi
           {
             echo "TAGS<<EOF"
             echo "$TAGS"
@@ -96,6 +104,7 @@ jobs:
         run: python3 .github/scripts/resolve_btbn_release.py
 
       - name: Build and push image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -142,6 +151,9 @@ jobs:
     permissions:
       contents: read
       packages: read
+    env:
+      # 本次 build-push-action 输出的多架构 manifest digest。
+      IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
 
     steps:
       - name: Set up QEMU
@@ -157,13 +169,15 @@ jobs:
       - name: Pull built image
         run: |
           IMAGE_NAME="${GITHUB_REPOSITORY,,}"
+          test -n "$IMAGE_DIGEST"
+          IMAGE="ghcr.io/${IMAGE_NAME}@${IMAGE_DIGEST}"
           for PLATFORM in linux/amd64 linux/arm64; do
-            docker pull --platform "$PLATFORM" "ghcr.io/${IMAGE_NAME}:latest"
+            docker pull --platform "$PLATFORM" "$IMAGE"
           done
 
       - name: Verify ffmpeg and ffprobe
         run: |
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}@${IMAGE_DIGEST}"
           for PLATFORM in linux/amd64 linux/arm64; do
             echo "== ${PLATFORM} =="
             docker run --rm --platform "$PLATFORM" --entrypoint ffmpeg "$IMAGE" -version
@@ -172,7 +186,7 @@ jobs:
 
       - name: Verify GPL compliance files
         run: |
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}@${IMAGE_DIGEST}"
           for PLATFORM in linux/amd64 linux/arm64; do
             echo "== ${PLATFORM} GPL files =="
             docker run --rm --platform "$PLATFORM" --entrypoint sh "$IMAGE" -c \
@@ -184,7 +198,7 @@ jobs:
 
       - name: Verify MP3 encoder
         run: |
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}@${IMAGE_DIGEST}"
           for PLATFORM in linux/amd64 linux/arm64; do
             echo "== ${PLATFORM} MP3 =="
             docker run --rm --platform "$PLATFORM" --entrypoint ffmpeg "$IMAGE" \
