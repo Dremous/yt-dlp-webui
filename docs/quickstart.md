@@ -61,6 +61,33 @@ docker run -d --name yt-dlp-webui \
 
 容器默认时区为 `Asia/Shanghai`；需要其他时区时加 `-e TZ=Asia/Tokyo`（使用 IANA 时区名）。
 
+### 使用 slim 镜像
+
+如果更在意镜像体积，把镜像标签从 `latest` 换成 `slim` 即可：
+
+```bash
+docker run -d --name yt-dlp-webui \
+  -p 8080:8080 \
+  -v "$PWD/downloads:/downloads" \
+  -v "$PWD/config:/config" \
+  --add-host=host.docker.internal:host-gateway \
+  --restart unless-stopped \
+  ghcr.io/dremous/yt-dlp-webui:slim
+```
+
+slim 用固定版本的静态 ffmpeg/ffprobe 替代 Debian apt 的 ffmpeg，避免引入
+Mesa/LLVM 等桌面图形栈依赖；MP4 合并、MP3 转码、PUID/PGID、TZ 与 YouTube EJS
+都保留。代价是首次构建需要从 GitHub Release 下载静态二进制，镜像体积比 latest
+小约 40%。需要 Debian 发行版 ffmpeg 的完整编解码组合时继续用 latest。
+
+Compose 默认仍是 latest；临时切换 slim：
+
+```bash
+IMAGE_TAG=slim docker compose up -d
+```
+
+长期使用可把 `IMAGE_TAG=slim` 写进项目根目录的 `.env`。
+
 | 需要持久化的东西 | 挂载到 | 说明 |
 |---|---|---|
 | 视频、音频、失败日志 | `./downloads` | 丢掉容器不会丢成品 |
@@ -89,11 +116,13 @@ docker compose up -d
 ```bash
 git clone https://github.com/dremous/yt-dlp-webui.git
 cd yt-dlp-webui
-docker build -t yt-dlp-webui .
-# 再执行上面的 docker run，把最后的镜像名换成 yt-dlp-webui
+docker build -t yt-dlp-webui .                  # 默认 latest（apt ffmpeg）
+docker build --target slim -t yt-dlp-webui:slim .  # 可选：静态 ffmpeg 的瘦身版
+# 再执行上面的 docker run，把最后的镜像名换成 yt-dlp-webui 或 yt-dlp-webui:slim
 ```
 
 构建会现场编译前端、拉取最新 yt-dlp nightly 与 deno 二进制，耗时几分钟。
+slim 目标还会从 GitHub Release 下载并校验固定版本的静态 ffmpeg/ffprobe。
 
 ## 工作原理
 
@@ -110,5 +139,5 @@ docker build -t yt-dlp-webui .
 | 前端 | React 18 + HeroUI + Tailwind CSS + Vite |
 | 后端 | Python 3.13 + FastAPI + Uvicorn |
 | 下载引擎 | yt-dlp（nightly，Python API）+ deno（EJS 挑战求解） |
-| 容器 | 多阶段镜像（node 构建前端 → deno 运行时 → python 运行），内置 ffmpeg |
+| 容器 | 多阶段镜像（node 构建前端 → deno 运行时 → python 运行）；latest 用 apt ffmpeg，slim 用静态 ffmpeg |
 | CI | GitHub Actions 定时构建，推送 GHCR（amd64 + arm64） |

@@ -11,18 +11,30 @@ on:
       - "v*"
 
 
+# 同一分支/标签的整次运行串行；不取消正在导出的 cache-to，
+# 只让后到的运行排队等待，避免构建结束时缓存写不进去。
+# 同一 run 内的 latest / slim 两个矩阵 job 仍然并行。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+
 jobs:
   build:
+    name: Build ${{ matrix.variant }} image
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write                  # 允许推送 GHCR 包
 
-    # 同一分支/标签串行构建；不取消正在导出的 cache-to，
-    # 只让后到的运行排队等待，避免构建结束时缓存写不进去。
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}
-      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: latest
+            target: latest
+          - variant: slim
+            target: slim
 
     steps:
       - name: Checkout
@@ -31,18 +43,52 @@ jobs:
       - name: Compute image name and date
         id: image
         run: |
-          echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-          echo "DATE=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
-          echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-          # 缓存按 ref 隔离：main 与 tag 共用 buildcache 会互相覆盖，
-          # 导致下一次构建拿到旧缓存。branch/tag 名可能含 /、中文、空格等
-          # OCI tag 不允许的字符，也可能超长；先清洗成合法字符并截断，
-          # 再拼 12 位 hash，保证不同 ref 不会因为截断而撞到同一个 tag。
+          VARIANT="${{ matrix.variant }}"
+          IMAGE_NAME="${GITHUB_REPOSITORY,,}"
+          DATE="$(date -u +%Y%m%d)"
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          echo "IMAGE_NAME=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "VARIANT=${VARIANT}" >> "$GITHUB_OUTPUT"
+          echo "DATE=${DATE}" >> "$GITHUB_OUTPUT"
+          echo "SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+          # 缓存按变体 + ref 隔离：latest 与 slim 的最终层不同，共用同一个
+          # cache tag 会互相覆盖；branch/tag 名也可能含 /、中文、空格等
+          # OCI tag 不允许的字符，也可能超长。先清洗成合法字符并截断，
+          # 再拼 12 位 hash，保证不同 ref 不会因为截断撞到同一个 tag。
           SAFE_REF=$(printf '%s' "$GITHUB_REF_NAME" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-60)
           REF_HASH=$(printf '%s' "${GITHUB_REF_TYPE}/${GITHUB_REF_NAME}" | sha256sum | cut -c1-12)
-          CACHE_TAG="buildcache-${GITHUB_REF_TYPE}-${SAFE_REF}-${REF_HASH}"
+          CACHE_TAG="buildcache-${VARIANT}-${GITHUB_REF_TYPE}-${SAFE_REF}-${REF_HASH}"
           echo "CACHE_TAG=${CACHE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "CACHE_REF=ghcr.io/${GITHUB_REPOSITORY,,}:${CACHE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "CACHE_REF=ghcr.io/${IMAGE_NAME}:${CACHE_TAG}" >> "$GITHUB_OUTPUT"
+
+          # 另一变体的缓存只读复用：两个变体共享 runtime / pip / deno 层，
+          # 读对方的 registry cache 能提高命中率，但写入仍只写自己的 tag。
+          if [ "$VARIANT" = "latest" ]; then
+            OTHER_VARIANT=slim
+          else
+            OTHER_VARIANT=latest
+          fi
+          OTHER_CACHE_TAG="buildcache-${OTHER_VARIANT}-${GITHUB_REF_TYPE}-${SAFE_REF}-${REF_HASH}"
+          echo "OTHER_CACHE_REF=ghcr.io/${IMAGE_NAME}:${OTHER_CACHE_TAG}" >> "$GITHUB_OUTPUT"
+
+          # latest 保持原有三个标签；slim 使用独立标签，避免覆盖 latest。
+          if [ "$VARIANT" = "latest" ]; then
+            TAGS="$(printf '%s\n' \
+              "ghcr.io/${IMAGE_NAME}:latest" \
+              "ghcr.io/${IMAGE_NAME}:${DATE}" \
+              "ghcr.io/${IMAGE_NAME}:${DATE}-${SHORT_SHA}")"
+          else
+            TAGS="$(printf '%s\n' \
+              "ghcr.io/${IMAGE_NAME}:${VARIANT}" \
+              "ghcr.io/${IMAGE_NAME}:${DATE}-${VARIANT}" \
+              "ghcr.io/${IMAGE_NAME}:${DATE}-${SHORT_SHA}-${VARIANT}")"
+          fi
+          {
+            echo "TAGS<<EOF"
+            echo "$TAGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -62,11 +108,18 @@ jobs:
         run: |
           # 首次构建没有 buildcache 时不要传 cache-from，避免把 missing manifest
           # 当成构建错误；有缓存时才启用 registry cache 导入。
-          if docker buildx imagetools inspect "${{ steps.image.outputs.CACHE_REF }}" >/dev/null 2>&1; then
-            echo "from=type=registry,ref=${{ steps.image.outputs.CACHE_REF }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "from=" >> "$GITHUB_OUTPUT"
-          fi
+          # 本变体、另一变体依次检查，另一变体只读，不写入。
+          : > /tmp/cache-from
+          for ref in "${{ steps.image.outputs.CACHE_REF }}" "${{ steps.image.outputs.OTHER_CACHE_REF }}"; do
+            if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+              echo "type=registry,ref=${ref}" >> /tmp/cache-from
+            fi
+          done
+          {
+            echo "from<<EOF"
+            cat /tmp/cache-from
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build and push image
         uses: docker/build-push-action@v6
@@ -74,6 +127,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          target: ${{ matrix.target }}
           # 将镜像标签版本（DATE-SHORT_SHA）烤入镜像，供「关于」界面显示
           build-args: |
             APP_VERSION=${{ steps.image.outputs.DATE }}-${{ steps.image.outputs.SHORT_SHA }}
@@ -81,10 +135,7 @@ jobs:
           # 双架构 mode=max 容易触及 GHA 缓存配额，导致旧层被淘汰、命中率下降。
           cache-from: ${{ steps.cache.outputs.from }}
           cache-to: type=registry,ref=${{ steps.image.outputs.CACHE_REF }},mode=max,ignore-error=true
-          tags: |
-            ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:latest
-            ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ steps.image.outputs.DATE }}
-            ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ steps.image.outputs.DATE }}-${{ steps.image.outputs.SHORT_SHA }}
+          tags: ${{ steps.image.outputs.TAGS }}
 
       - name: Verify registry cache
         if: success()
@@ -99,9 +150,52 @@ jobs:
           # 可选：配置仓库 secret WEBHOOK_URL（飞书/企业微信/钉钉机器人地址）即可推送失败告警
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
         run: |
-          echo "::error::yt-dlp-webui 镜像构建失败（run #${{ github.run_number }}）"
+          echo "::error::yt-dlp-webui ${{ matrix.variant }} 镜像构建失败（run #${{ github.run_number }}）"
           if [ -n "$WEBHOOK_URL" ]; then
             curl -fsS -X POST "$WEBHOOK_URL" \
               -H 'Content-Type: application/json' \
-              -d "{\"msg_type\":\"text\",\"content\":{\"text\":\"yt-dlp-webui 镜像构建失败 run#${{ github.run_number }}\"}}" || true
+              -d "{\"msg_type\":\"text\",\"content\":{\"text\":\"yt-dlp-webui ${{ matrix.variant }} 镜像构建失败 run#${{ github.run_number }}\"}}" || true
           fi
+
+  smoke:
+    name: Smoke test ${{ matrix.variant }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [latest, slim]
+
+    steps:
+      - name: Compute image name
+        id: image
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull built image
+        run: |
+          docker pull "ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ matrix.variant }}"
+
+      - name: Verify ffmpeg and ffprobe
+        run: |
+          IMAGE="ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ matrix.variant }}"
+          docker run --rm --entrypoint ffmpeg "$IMAGE" -version
+          docker run --rm --entrypoint ffprobe "$IMAGE" -version
+
+      - name: Verify slim MP3 encoder
+        if: matrix.variant == 'slim'
+        run: |
+          IMAGE="ghcr.io/${{ steps.image.outputs.IMAGE_NAME }}:${{ matrix.variant }}"
+          docker run --rm --entrypoint ffmpeg "$IMAGE" \
+            -hide_banner -loglevel error \
+            -f lavfi -i "sine=frequency=440:sample_rate=44100" \
+            -t 1 -c:a libmp3lame /tmp/smoke.mp3

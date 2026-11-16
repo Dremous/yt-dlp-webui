@@ -12,7 +12,7 @@
 │   ├── operations.md             # 构建、日志、本地开发、配置
 │   ├── api.md                    # HTTP API
 │   └── project-structure.md      # 本文件：目录与测试说明
-├── Dockerfile                    # 多阶段构建（node 前端 → deno 运行时 → python 后端）
+├── Dockerfile                    # 多阶段构建（node 前端 → deno → python；latest apt ffmpeg / slim 静态 ffmpeg）
 ├── docker-compose.yml            # Compose 编排（downloads + config 卷）
 ├── requirements.txt              # Python 依赖（yt-dlp 由 Dockerfile 装 nightly）
 ├── assets/readme/                # 文档配图（纯 SVG，可手改）

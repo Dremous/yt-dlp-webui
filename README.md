@@ -37,6 +37,19 @@ docker run -d --name yt-dlp-webui \
 
 打开 [http://localhost:8080](http://localhost:8080)，粘贴链接即可下载。
 
+如果更在意镜像体积，可以把最后的 `:latest` 换成 `:slim`。slim 使用静态 ffmpeg，
+保留 MP4 合并、MP3 转码、PUID/PGID、TZ 与 YouTube EJS，镜像比 latest 小约 40%：
+
+```bash
+docker run -d --name yt-dlp-webui \
+  -p 8080:8080 \
+  -v "$PWD/downloads:/downloads" \
+  -v "$PWD/config:/config" \
+  --add-host=host.docker.internal:host-gateway \
+  --restart unless-stopped \
+  ghcr.io/dremous/yt-dlp-webui:slim
+```
+
 容器默认时区为 `Asia/Shanghai`；需要其他时区时加 `-e TZ=Asia/Tokyo`（使用 IANA 时区名）。
 
 需要持久化目录说明、Docker Compose、从源码构建或输出格式对照表，见

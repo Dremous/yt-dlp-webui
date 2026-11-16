@@ -1,7 +1,8 @@
 services:
   yt-dlp-webui:
     container_name: yt-dlp-webui
-    image: ghcr.io/dremous/yt-dlp-webui:latest
+    # 默认仍用 latest；想换瘦身版可设置 IMAGE_TAG=slim 后 docker compose up -d。
+    image: ghcr.io/dremous/yt-dlp-webui:${IMAGE_TAG:-latest}
     ports:
       # BIND_ADDR 控制系统对外绑定的网卡：默认 0.0.0.0 保持现有局域网访问；
       # 建议在只信任 LAN 的机器上设为具体 LAN IP（如 192.168.1.10），

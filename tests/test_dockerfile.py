@@ -37,6 +37,12 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertIn("${PORT:-8080}:${PORT:-8080}", content)
         self.assertIn("PORT=${PORT:-8080}", content)
 
+    def test_compose_defaults_to_latest_image_tag(self):
+        content = (self.root / "docker-compose.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            'ghcr.io/dremous/yt-dlp-webui:${IMAGE_TAG:-latest}', content
+        )
+
     def test_compose_bind_addr_can_limit_listening_interface(self):
         content = (self.root / "docker-compose.yml").read_text(encoding="utf-8")
         # 默认保留 0.0.0.0 以不破坏现有 LAN 访问；BIND_ADDR 可收紧到具体网卡/IP。
@@ -78,22 +84,93 @@ class DockerfileConfigTest(unittest.TestCase):
         ]
         self.assertEqual(len(python_stages), 1)
 
+    def test_latest_target_keeps_apt_ffmpeg_and_is_default(self):
+        """默认 build target 必须仍是 latest，且 latest 仍走 apt ffmpeg。"""
+        content = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        instructions = self._instructions(content)
+        from_lines = [line for line in instructions if line.startswith("FROM ")]
+        self.assertEqual(from_lines[-1], "FROM runtime AS latest")
+        self.assertIn("FROM runtime AS slim", from_lines)
+
+        latest_body = content.split("FROM runtime AS latest", 1)[1]
+        self.assertRegex(latest_body, r"apt-get install[^\n]*\n?\s*ffmpeg")
+        self.assertNotIn("ffmpeg-static", latest_body)
+
+    def test_slim_target_uses_pinned_static_ffmpeg_and_ffprobe(self):
+        content = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("FROM alpine:3.20 AS ffmpeg-static", content)
+        self.assertIn("ffmpeg-linux-x64.gz", content)
+        self.assertIn("ffmpeg-linux-arm64.gz", content)
+        self.assertIn("ffprobe-linux-x64.gz", content)
+        self.assertIn("ffprobe-linux-arm64.gz", content)
+        # 四个资产的 SHA256 必须固定，避免上游 release 被替换后静默改变镜像内容。
+        for digest in (
+            "bfe8a8fc511530457b528c48d77b5737527b504a3797a9bc4866aeca69c2dffa",
+            "754a678672298bc68156adff58aa7385a592c2b30b1d0ae8750c45c915c4bac0",
+            "25d9b6ccb05e3d9de9e04e31e2506d8dd7f9f0418981965ac6df12e8d3afd067",
+            "2ab6aba60ee84412dff9188720703376cb4e7aaf7e0b5e43aa8249f2acae5bf8",
+        ):
+            self.assertIn(digest, content)
+        self.assertIn("sha256sum -c", content)
+
+        slim_body = content.split("FROM runtime AS slim", 1)[1].split(
+            "FROM runtime AS latest", 1
+        )[0]
+        self.assertIn("COPY --from=ffmpeg-static /out/ffmpeg /usr/local/bin/ffmpeg", slim_body)
+        self.assertIn("COPY --from=ffmpeg-static /out/ffprobe /usr/local/bin/ffprobe", slim_body)
+        self.assertIn("ffmpeg -version", slim_body)
+        self.assertIn("ffprobe -version", slim_body)
+
     def test_workflow_cache_ref_is_isolated_by_ref(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"
         )
-        # main 与 tag 不能共用同一个 cache tag，否则会互相覆盖。
+        # main 与 tag 不能共用同一个 cache tag，否则会互相覆盖；
+        # latest/slim 也必须各自写独立的 cache tag，避免两个变体互相覆盖。
         self.assertIn("SAFE_REF=", content)
         self.assertIn("REF_HASH=", content)
         self.assertIn("tr -cs", content)
         self.assertIn("sha256sum", content)
         self.assertIn(
-            'CACHE_TAG="buildcache-${GITHUB_REF_TYPE}-${SAFE_REF}-${REF_HASH}"',
+            'CACHE_TAG="buildcache-${VARIANT}-${GITHUB_REF_TYPE}-${SAFE_REF}-${REF_HASH}"',
             content,
         )
         self.assertIn(
-            "CACHE_REF=ghcr.io/${GITHUB_REPOSITORY,,}:${CACHE_TAG}", content
+            "CACHE_REF=ghcr.io/${IMAGE_NAME}:${CACHE_TAG}", content
         )
+
+    def test_workflow_builds_latest_and_slim_targets(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("variant: latest", content)
+        self.assertIn("variant: slim", content)
+        self.assertIn("target: ${{ matrix.target }}", content)
+        self.assertIn('if [ "$VARIANT" = "latest" ]', content)
+        self.assertIn("ghcr.io/${IMAGE_NAME}:${VARIANT}", content)
+        self.assertIn("ghcr.io/${IMAGE_NAME}:${DATE}-${VARIANT}", content)
+        self.assertIn(
+            "ghcr.io/${IMAGE_NAME}:${DATE}-${SHORT_SHA}-${VARIANT}", content
+        )
+
+    def test_workflow_reuses_other_variant_cache_read_only(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        # 两个变体各自写自己的 cache tag，但读取时可以复用另一变体的公共层。
+        self.assertIn("OTHER_CACHE_REF", content)
+        self.assertIn('for ref in "${{ steps.image.outputs.CACHE_REF }}"', content)
+        self.assertIn("from<<EOF", content)
+
+    def test_workflow_smoke_tests_both_variants(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("smoke:", content)
+        self.assertIn("--entrypoint ffmpeg", content)
+        self.assertIn("--entrypoint ffprobe", content)
+        self.assertIn("Verify slim MP3 encoder", content)
+        self.assertIn("libmp3lame", content)
 
     def test_runtime_user_can_be_overridden_with_puid_pgid(self):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
@@ -271,12 +348,11 @@ class DockerfileConfigTest(unittest.TestCase):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"
         )
-        # 首次没有 buildcache 时不传 cache-from，有缓存时用的仍是同一个 CACHE_REF。
+        # 首次没有 buildcache 时不传 cache-from，有缓存时用的仍是同一个 CACHE_REF；
+        # 另一变体只加入 cache-from 读取，不参与 cache-to 写入。
         self.assertIn("name: Resolve cache source", content)
         self.assertIn("steps.cache.outputs.from", content)
-        self.assertIn(
-            "from=type=registry,ref=${{ steps.image.outputs.CACHE_REF }}", content
-        )
+        self.assertIn('echo "type=registry,ref=${ref}"', content)
         self.assertIn(
             "cache-to: type=registry,ref=${{ steps.image.outputs.CACHE_REF }}",
             content,
@@ -297,6 +373,15 @@ class DockerfileConfigTest(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertRegex(content, r"(?m)^\s*cancel-in-progress:\s*false\s*$")
+
+    def test_docs_explain_slim_image_tag(self):
+        quickstart = (self.root / "docs/quickstart.md").read_text(encoding="utf-8")
+        operations = (self.root / "docs/operations.md").read_text(encoding="utf-8")
+        readme = (self.root / "README.md").read_text(encoding="utf-8")
+        for content in (quickstart, operations, readme):
+            self.assertIn("slim", content)
+        self.assertIn("IMAGE_TAG=slim", quickstart)
+        self.assertIn("static-ffmpeg", operations)
 
 
 if __name__ == "__main__":

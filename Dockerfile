@@ -3,12 +3,22 @@
 #
 # 阶段一：构建 HeroUI 前端（node 构建产物输出到 app/static）
 # 阶段二：取 JavaScript 运行时（deno，供 yt-dlp 的 EJS 使用）
-# 阶段三：后端运行时（python + ffmpeg + deno + 静态前端）
+# 阶段三：下载静态 ffmpeg（仅 slim 变体使用）
+# 阶段四：后端运行时公共层（python + deno + 静态前端，不含 ffmpeg）
+# 阶段五：slim（静态 ffmpeg）
+# 阶段六：latest（apt ffmpeg，保持原有行为；作为默认 target 放在最后）
+#
+# 默认 build target 是最后一个阶段 latest；slim 必须显式 --target slim。
 # ==========================================================================
 
 # 必须在第一个 FROM 之前声明：只有全局作用域的 ARG 才能参与 FROM 的变量替换。
 # 若 denoland/deno 上该 tag 不存在，改成 bin-latest 即可。
 ARG DENO_VERSION=2.9.7
+
+# 静态 ffmpeg 的 GitHub Release 版本。二进制由 johnvansickle 构建（7.0.2，GPLv3），
+# eugeneware/ffmpeg-static 只做 GitHub Release 分发，避免 CI 直接依赖
+# johnvansickle.com 的下载速度。升级时同时更新版本和四个 SHA256。
+ARG FFMPEG_STATIC_RELEASE=b6.1.1
 
 # ---------- 阶段一：前端构建 ----------
 # --platform=$BUILDPLATFORM：前端产物是纯静态 JS/HTML/CSS，与目标架构无关。
@@ -32,8 +42,61 @@ RUN npm run build
 # 多架构构建时按目标平台自动选对应架构的二进制（amd64 / arm64 均有）。
 FROM denoland/deno:bin-${DENO_VERSION} AS deno-bin
 
-# ---------- 阶段三：后端运行时 ----------
-FROM python:3.13-slim
+# ---------- 阶段三：静态 ffmpeg（仅 slim 使用） ----------
+# 资产来自 eugeneware/ffmpeg-static 的 GitHub Release（b6.1.1）：
+#   linux-x64 / linux-arm64 的 ffmpeg.gz、ffprobe.gz、LICENSE、README
+# 二进制实际是 johnvansickle 的 7.0.2 static build（GPLv3）。
+#
+# 四个下载资产的 SHA256 全部写死：上游 release 被替换、下载被劫持或镜像损坏时
+# 构建会立即失败，而不是静默产出内容不同的镜像。
+FROM alpine:3.20 AS ffmpeg-static
+ARG TARGETARCH
+ARG FFMPEG_STATIC_RELEASE
+
+RUN apk add --no-cache ca-certificates curl \
+    && case "$TARGETARCH" in \
+        amd64) \
+            ffmpeg_asset=ffmpeg-linux-x64.gz; \
+            ffmpeg_sha=bfe8a8fc511530457b528c48d77b5737527b504a3797a9bc4866aeca69c2dffa; \
+            ffprobe_asset=ffprobe-linux-x64.gz; \
+            ffprobe_sha=25d9b6ccb05e3d9de9e04e31e2506d8dd7f9f0418981965ac6df12e8d3afd067; \
+            license_asset=linux-x64.LICENSE; \
+            readme_asset=linux-x64.README ;; \
+        arm64) \
+            ffmpeg_asset=ffmpeg-linux-arm64.gz; \
+            ffmpeg_sha=754a678672298bc68156adff58aa7385a592c2b30b1d0ae8750c45c915c4bac0; \
+            ffprobe_asset=ffprobe-linux-arm64.gz; \
+            ffprobe_sha=2ab6aba60ee84412dff9188720703376cb4e7aaf7e0b5e43aa8249f2acae5bf8; \
+            license_asset=linux-arm64.LICENSE; \
+            readme_asset=linux-arm64.README ;; \
+        *) \
+            echo "不支持的 TARGETARCH：$TARGETARCH" >&2; \
+            exit 1 ;; \
+    esac \
+    && mkdir -p /out \
+    && curl -fsSL --retry 3 --retry-delay 2 \
+        -o /tmp/ffmpeg.gz \
+        "https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_STATIC_RELEASE}/${ffmpeg_asset}" \
+    && printf '%s  %s\n' "${ffmpeg_sha}" "/tmp/ffmpeg.gz" > /tmp/ffmpeg.sha256 \
+    && sha256sum -c /tmp/ffmpeg.sha256 \
+    && curl -fsSL --retry 3 --retry-delay 2 \
+        -o /tmp/ffprobe.gz \
+        "https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_STATIC_RELEASE}/${ffprobe_asset}" \
+    && printf '%s  %s\n' "${ffprobe_sha}" "/tmp/ffprobe.gz" > /tmp/ffprobe.sha256 \
+    && sha256sum -c /tmp/ffprobe.sha256 \
+    && curl -fsSL --retry 3 --retry-delay 2 \
+        -o /out/LICENSE \
+        "https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_STATIC_RELEASE}/${license_asset}" \
+    && curl -fsSL --retry 3 --retry-delay 2 \
+        -o /out/README \
+        "https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_STATIC_RELEASE}/${readme_asset}" \
+    && gzip -dc /tmp/ffmpeg.gz > /out/ffmpeg \
+    && gzip -dc /tmp/ffprobe.gz > /out/ffprobe \
+    && chmod 0755 /out/ffmpeg /out/ffprobe \
+    && rm -f /tmp/ffmpeg.gz /tmp/ffprobe.gz /tmp/ffmpeg.sha256 /tmp/ffprobe.sha256
+
+# ---------- 阶段四：后端运行时公共层 ----------
+FROM python:3.13-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -57,10 +120,9 @@ ENV PUID=10001 \
 # 运行时可用 -e TZ=Asia/Tokyo 覆盖，入口脚本会校验 IANA 时区名。
 ENV TZ=Asia/Shanghai
 
-# ffmpeg：用于视频合并与音频转码（mp3 提取必需）；gosu：入口脚本降权用；
-# tzdata：提供 /usr/share/zoneinfo，供 TZ 变量解析时区。
+# gosu：入口脚本降权用；tzdata：提供 /usr/share/zoneinfo，供 TZ 变量解析时区。
+# ffmpeg 不在这里安装：latest 在最终阶段走 apt，slim 复制静态二进制。
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ffmpeg \
         gosu \
         tzdata \
     && rm -rf /var/lib/apt/lists/* \
@@ -124,3 +186,22 @@ VOLUME /downloads /config
 # 实际运行的 uvicorn 进程不是 root。日志由 app 内的 setup_logging 配置。
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python", "-m", "app.serve"]
+
+# ---------- 阶段五：slim（静态 ffmpeg） ----------
+# 复制静态二进制和 GPL 许可证；ffmpeg 与 ffprobe 都保留，避免 yt-dlp 的音频探测
+# 和元数据能力出现回归。构建期执行 --version，错架构/缺依赖会立即失败。
+FROM runtime AS slim
+RUN mkdir -p /usr/share/doc/ffmpeg
+COPY --from=ffmpeg-static /out/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg-static /out/ffprobe /usr/local/bin/ffprobe
+COPY --from=ffmpeg-static /out/LICENSE /usr/share/doc/ffmpeg/LICENSE
+COPY --from=ffmpeg-static /out/README /usr/share/doc/ffmpeg/README.static
+RUN ffmpeg -version >/dev/null && ffprobe -version >/dev/null
+
+# ---------- 阶段六：latest（apt ffmpeg，保持原有行为） ----------
+# 必须放在最后：docker build 不带 --target 时默认构建最后一个阶段，
+# 因此现有 `docker build` / CI 的默认产物仍然是 latest。
+FROM runtime AS latest
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*

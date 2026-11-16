@@ -13,7 +13,27 @@
 | `push` | 推送 `main` 分支或打 `v*` 标签 |
 
 构建时从 GitHub `yt-dlp-nightly-builds` 源码安装 `yt-dlp`（模块名仍为 `yt_dlp`，代码零改动），
-因此每次构建的镜像都内置最新 nightly。产物推送到 **GHCR**，标签为 `latest`、`DATE` 与 `DATE-SHORT_SHA`。
+因此每次构建的镜像都内置最新 nightly。产物推送到 **GHCR**，标签为：
+
+| 变体 | 标签 |
+|---|---|
+| latest（Debian apt ffmpeg） | `latest`、`DATE`、`DATE-SHORT_SHA` |
+| slim（静态 ffmpeg） | `slim`、`DATE-slim`、`DATE-SHORT_SHA-slim` |
+
+两个变体共用同一套 Python/Deno/应用层，CI 用独立 registry cache tag 分别写入；
+构建时会读取另一变体的 cache 复用公共层，但不写入对方的 tag。
+
+### latest 与 slim 的区别
+
+- **latest**：保持原有行为，`apt-get install ffmpeg`，包含 Debian 的完整编解码组合。
+- **slim**：用固定版本的 `static-ffmpeg` 二进制（johnvansickle 7.0.2，GPLv3）替代 apt ffmpeg，
+  同时复制 `ffmpeg` 与 `ffprobe`，避免 yt-dlp 的音频探测/元数据能力退化。
+  下载资产固定为 `eugeneware/ffmpeg-static` 的 `b6.1.1` Release，四个资产的 SHA256 写死在
+  Dockerfile 中；PUID/PGID、TZ、非 root 运行、YouTube EJS 全部保留。
+
+slim 的代价是构建时依赖 GitHub Release 下载；如果上游资产被替换，SHA256 校验会让构建失败，
+需要人工确认后更新 Dockerfile 中的版本与校验值。GPLv3 许可证和上游 README 会复制到
+镜像内的 `/usr/share/doc/ffmpeg/`。
 
 > 前置设置：GitHub 仓库 `Settings → Packages` 中启用 GHCR；首次使用时需为镜像设置可见性。
 > 无需额外密钥——workflow 使用内置的 `GITHUB_TOKEN` 自动完成 GHCR 登录。
