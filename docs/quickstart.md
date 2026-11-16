@@ -61,33 +61,21 @@ docker run -d --name yt-dlp-webui \
 
 容器默认时区为 `Asia/Shanghai`；需要其他时区时加 `-e TZ=Asia/Tokyo`（使用 IANA 时区名）。
 
-### 使用 slim 镜像
+### 镜像标签
 
-如果更在意镜像体积，把镜像标签从 `latest` 换成 `slim` 即可：
+现在只有一个发布变体：`latest`。它内置 BtbN 的 GPL 静态 ffmpeg，CI 每次构建会解析其
+最新稳定的 nX.Y 分支，MP4 合并、MP3 转码、PUID/PGID、TZ 与 YouTube EJS 都保留。
 
-```bash
-docker run -d --name yt-dlp-webui \
-  -p 8080:8080 \
-  -v "$PWD/downloads:/downloads" \
-  -v "$PWD/config:/config" \
-  --add-host=host.docker.internal:host-gateway \
-  --restart unless-stopped \
-  ghcr.io/dremous/yt-dlp-webui:slim
+需要固定某次构建时，把 `latest` 换成日期标签。日期标签形如
+`20261117-abc1234`（`DATE-SHORT_SHA`，以实际构建输出为准），可在 GHCR 标签列表里找到：
+
+```text
+ghcr.io/dremous/yt-dlp-webui:20261117-abc1234
 ```
 
-slim 用 BtbN 的 GPL 静态 ffmpeg 构建替代 Debian apt 的 ffmpeg，避免引入
-Mesa/LLVM 等桌面图形栈依赖；MP4 合并、MP3 转码、PUID/PGID、TZ 与 YouTube EJS
-都保留。CI 每次构建会解析 BtbN `latest` release 中最新的 nX.Y 稳定分支，镜像体积
-仍小于 latest，但会随上游资产大小变化。需要 Debian 发行版 ffmpeg 的完整编解码组合时
-继续用 latest。
+日期标签不可变，适合排查“某次构建后才出现”的问题；浮动的 `latest` 会随 CI 更新。
 
-Compose 默认仍是 latest；临时切换 slim：
-
-```bash
-IMAGE_TAG=slim docker compose up -d
-```
-
-长期使用可把 `IMAGE_TAG=slim` 写进项目根目录的 `.env`。
+原先的 `slim` 标签已停止更新；原 slim 用户请改用 `latest` 或对应日期标签。
 
 | 需要持久化的东西 | 挂载到 | 说明 |
 |---|---|---|
@@ -117,14 +105,13 @@ docker compose up -d
 ```bash
 git clone https://github.com/dremous/yt-dlp-webui.git
 cd yt-dlp-webui
-docker build -t yt-dlp-webui .                  # 默认 latest（apt ffmpeg）
-docker build --target slim -t yt-dlp-webui:slim .  # 可选：静态 ffmpeg 的瘦身版
-# 再执行上面的 docker run，把最后的镜像名换成 yt-dlp-webui 或 yt-dlp-webui:slim
+docker build -t yt-dlp-webui .
+# 再执行上面的 docker run，把最后的镜像名换成 yt-dlp-webui
 ```
 
 构建会现场编译前端、拉取最新 yt-dlp nightly 与 deno 二进制，耗时几分钟。
-slim 目标还会从 BtbN 的 `latest` release 下载当前 fallback 版本（9.0）的 GPL
-静态 ffmpeg/ffprobe；CI 构建则会解析最新的 nX.Y 稳定分支。
+默认目标 `latest` 会从 BtbN 的 `latest` release 下载当前 fallback 版本（9.0）的 GPL
+静态 ffmpeg/ffprobe；CI 构建则会解析最新的 nX.Y 稳定分支并强制刷新下载。
 
 ## 工作原理
 
@@ -141,5 +128,5 @@ slim 目标还会从 BtbN 的 `latest` release 下载当前 fallback 版本（9.
 | 前端 | React 18 + HeroUI + Tailwind CSS + Vite |
 | 后端 | Python 3.13 + FastAPI + Uvicorn |
 | 下载引擎 | yt-dlp（nightly，Python API）+ deno（EJS 挑战求解） |
-| 容器 | 多阶段镜像（node 构建前端 → deno 运行时 → python 运行）；latest 用 apt ffmpeg，slim 用 BtbN GPL ffmpeg |
+| 容器 | 多阶段镜像（node 构建前端 → deno 运行时 → python 运行）；latest 内置 BtbN GPL 静态 ffmpeg |
 | CI | GitHub Actions 定时构建，推送 GHCR（amd64 + arm64） |
