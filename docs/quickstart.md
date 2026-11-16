@@ -59,6 +59,8 @@ docker run -d --name yt-dlp-webui \
 
 打开 [http://localhost:8080](http://localhost:8080)，粘贴链接即可下载。
 
+容器默认时区为 `Asia/Shanghai`；需要其他时区时加 `-e TZ=Asia/Tokyo`（使用 IANA 时区名）。
+
 | 需要持久化的东西 | 挂载到 | 说明 |
 |---|---|---|
 | 视频、音频、失败日志 | `./downloads` | 丢掉容器不会丢成品 |
@@ -80,6 +82,7 @@ docker compose up -d
 下载文件默认归属容器内 UID/GID `10001`。要让文件直接归宿主机用户，在项目根目录的
 `.env` 里写 `PUID=1000`、`PGID=1000`（改成 `id -u` / `id -g` 的实际值），再
 `docker compose up -d`；入口脚本会修正 `./downloads` 和 `./config` 的归属后降权运行。
+同一个 `.env` 里还可以用 `TZ=Asia/Shanghai`（默认）或 `TZ=UTC` 等 IANA 时区名调整容器时间。
 
 ### 从源码构建镜像
 

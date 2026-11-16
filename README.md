@@ -37,6 +37,8 @@ docker run -d --name yt-dlp-webui \
 
 打开 [http://localhost:8080](http://localhost:8080)，粘贴链接即可下载。
 
+容器默认时区为 `Asia/Shanghai`；需要其他时区时加 `-e TZ=Asia/Tokyo`（使用 IANA 时区名）。
+
 需要持久化目录说明、Docker Compose、从源码构建或输出格式对照表，见
 [快速开始与使用](docs/quickstart.md)。
 

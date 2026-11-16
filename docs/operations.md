@@ -80,11 +80,16 @@ python -m unittest discover -s tests -v
 | `LOG_BACKUPS` | `5` | 保留的历史日志文件个数 |
 | `LOG_CONSOLE` | `1` | 置 `0` 则只写文件，不再打印到 `docker logs` |
 | `PORT` | `8080` | 容器内监听端口；健康检查与 compose 端口映射会跟随该变量 |
+| `TZ` | `Asia/Shanghai` | 容器内本地时区（IANA 名称）；影响日志时间戳与任务库损坏备份文件名 |
 | `PUID` | `10001` | 容器内进程与挂载目录的 UID；设为宿主机用户（如 `1000`）可避免下载文件归属错位 |
 | `PGID` | `10001` | 容器内进程与挂载目录的 GID；通常与 `PUID` 一起设置 |
 | `WEBUI_ALLOWED_HOSTS` | 空 | 额外放行的 Host（逗号分隔，如自定义域名）；localhost、私网 IP、`host.docker.internal` 默认放行 |
 
 对外端口默认 8080，可用 `PORT` 覆盖；容器内监听、健康检查与 compose 映射会一起跟随。
+
+`TZ` 默认 `Asia/Shanghai`，可改为 `UTC`、`Asia/Tokyo` 等 IANA 时区名。它影响服务端日志
+时间戳和任务库损坏时的备份文件名；文件列表里的下载时间由浏览器按本地时区格式化。
+入口脚本会检查 `/usr/share/zoneinfo`，非法时区名会拒绝启动，避免静默回退成 UTC。
 
 `PUID` / `PGID` 默认为 `10001:10001`。如果宿主机用户 UID/GID 是 `1000`，在 `.env` 或
 compose 环境里设置 `PUID=1000`、`PGID=1000`，重启容器后入口脚本会先递归修正
