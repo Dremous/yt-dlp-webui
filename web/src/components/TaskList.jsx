@@ -209,6 +209,11 @@ function progressColor(status) {
 
 function TaskItem({ task, onChanged, onDelete }) {
   const meta = STATE_META[task.status] || { label: task.status, color: "default" };
+  // 合并 / 转码属于 postprocessing：status 仍是 downloading，但继续显示
+  // “下载中”会让用户以为还在拉字节。用后端 stage 覆盖状态文案与颜色。
+  const inPostprocess = task.status === "downloading" && Boolean(task.stage);
+  const displayLabel = inPostprocess ? task.stage : meta.label;
+  const displayColor = inPostprocess ? "warning" : meta.color;
   const motionSafe = useMotionSafe();
   const title = task.title ? ` · ${task.title}` : "";
   const isEnded = ENDED_STATES.includes(task.status);
@@ -257,19 +262,19 @@ function TaskItem({ task, onChanged, onDelete }) {
         <Chip
           size="sm"
           variant="flat"
-          color={meta.color}
+          color={displayColor}
           startContent={
             task.status === "downloading" ? (
               <span className="relative flex w-2 h-2" aria-hidden="true">
-                <span className="absolute inline-flex w-full h-full rounded-full bg-emerald-400 animate-ping-soft" />
-                <span className="relative inline-flex w-2 h-2 rounded-full bg-emerald-400" />
+                <span className={`absolute inline-flex w-full h-full rounded-full ${inPostprocess ? "bg-amber-400" : "bg-emerald-400"} animate-ping-soft`} />
+                <span className={`relative inline-flex w-2 h-2 rounded-full ${inPostprocess ? "bg-amber-400" : "bg-emerald-400"}`} />
               </span>
             ) : (
               <Icon size={13} weight="bold" aria-hidden="true" />
             )
           }
         >
-          {meta.label}
+          {displayLabel}
         </Chip>
       </div>
 
@@ -279,7 +284,7 @@ function TaskItem({ task, onChanged, onDelete }) {
           size="sm"
           value={task.progress}
           className="max-w-full"
-          color={progressColor(task.status)}
+          color={inPostprocess ? "warning" : progressColor(task.status)}
         />
         {/* 合并/转码阶段没有字节流量，流光会让「已经下完」看起来还在动，这里停掉 */}
         {task.status === "downloading" && !task.stage && (
