@@ -79,6 +79,19 @@ def _video_options(max_height: Optional[int] = None,
 # 兜底值，见 web/src/components/DownloadForm.jsx）。
 DEFAULT_FORMAT = "best"
 
+# yt-dlp 的 postprocessor hook 会带 `postprocessor` 名称（pp_key()，如
+# Merger / ExtractAudio），用它把泛化的“合并 / 转码中”细分成用户能看懂的具体
+# 阶段。未知后处理器一律回退到“后期处理中”，避免把元数据整理等步骤误报成转码。
+POSTPROCESSOR_STAGE_LABELS = {
+    "Merger": "合并中",
+    "ExtractAudio": "转码中",
+    "VideoConvertor": "转码中",
+    "VideoRemuxer": "转码中",
+    "SubtitlesConvertor": "转码中",
+    "ThumbnailsConvertor": "转码中",
+}
+POSTPROCESSOR_STAGE_FALLBACK = "后期处理中"
+
 FORMATS: Dict[str, dict] = {
     # ---- 视频 ----
     # 默认档：不转码，直接拿站点给的最高画质（可能是 webm / AV1）
@@ -223,7 +236,7 @@ class DownloadTask:
         self.progress: float = 0.0      # 0 ~ 100
         self.speed: Optional[str] = None
         self.eta: Optional[str] = None
-        self.stage: Optional[str] = None  # 下载结束后的后期处理阶段（合并 / 转码）
+        self.stage: Optional[str] = None  # 下载结束后的后期处理阶段（合并中 / 转码中 / 后期处理中）
         self.title: Optional[str] = None
         self.filename: Optional[str] = None  # 相对下载目录的路径（含任务子目录前缀）
         self.error: Optional[str] = None
@@ -923,9 +936,12 @@ class DownloadManager:
             task.eta = None
             self.persist(task)
         elif status == "started":
-            # postprocessor 钩子没有名字（yt-dlp 只传 status），只能给个通用阶段；
-            # 它的意义是让前端知道「下载已结束、正在合并/转码」，而不是卡在 100%
-            task.stage = "合并 / 转码中"
+            # postprocessor 钩子带 postprocessor 名称，按类型给出更精确的阶段。
+            # 它的意义是让前端知道「下载已结束、正在后期处理」，而不是卡在 100%。
+            postprocessor = data.get("postprocessor")
+            task.stage = POSTPROCESSOR_STAGE_LABELS.get(
+                postprocessor, POSTPROCESSOR_STAGE_FALLBACK
+            )
             task.speed = None
             task.eta = None
             self.persist(task)
