@@ -3,7 +3,7 @@
 #
 # 阶段一：构建 HeroUI 前端（node 构建产物输出到 app/static）
 # 阶段二：取 JavaScript 运行时（deno，供 yt-dlp 的 EJS 使用）
-# 阶段三：取静态 ffmpeg（仅 slim 变体使用）
+# 阶段三：下载静态 ffmpeg（仅 slim 变体使用）
 # 阶段四：后端运行时公共层（python + deno + 静态前端，不含 ffmpeg）
 # 阶段五：slim（静态 ffmpeg）
 # 阶段六：latest（apt ffmpeg，保持原有行为；作为默认 target 放在最后）

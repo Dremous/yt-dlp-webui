@@ -67,7 +67,7 @@ docker exec yt-dlp-webui tail -n 100 /config/webui.log    # 或进容器看
 - 日志里每 30 秒一条 `GET /api/formats` 是 Docker 的 HEALTHCHECK 探活，已默认静音（失败时仍会打印）
 - 容器入口与本地 `uvicorn app.main:app` 都读同一组 `LOG_*` 变量（文件在本地同样生效）
 
-> 也可以交给 Docker 自己轮转：`--log-opt max-size=10m --log-max-file=5`。
+> 也可以交给 Docker 自己轮转：`--log-opt max-size=10m --log-opt max-file=5`。
 > 两者不冲突——文件那份方便拷走，`docker logs` 那份方便 `docker logs -f`。
 
 ## 本地开发
