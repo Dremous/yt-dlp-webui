@@ -75,8 +75,14 @@ RUN set -eux; \
     rm -f "/tmp/${ASSET}"; \
     /opt/ffmpeg/bin/ffmpeg -version > /opt/ffmpeg/version.txt; \
     /opt/ffmpeg/bin/ffprobe -version >> /opt/ffmpeg/version.txt; \
-    printf 'FFmpeg corresponding source: https://github.com/FFmpeg/FFmpeg (exact commit is in version.txt)\nFFmpeg release tarball: https://ffmpeg.org/releases/ffmpeg-%s.tar.xz\nBtbN build scripts: https://github.com/BtbN/FFmpeg-Builds\n' \
-      "${FFMPEG_BUILDS_VERSION}" > /opt/ffmpeg/SOURCE.txt; \
+    COMMIT=$(grep -oE 'g[0-9a-f]{7,40}' /opt/ffmpeg/version.txt | head -n1 | cut -c2- || true); \
+    if [ -n "${COMMIT}" ]; then \
+      SOURCE_URL="https://github.com/FFmpeg/FFmpeg/tree/${COMMIT}"; \
+    else \
+      SOURCE_URL="https://github.com/FFmpeg/FFmpeg/tree/n${FFMPEG_BUILDS_VERSION}"; \
+    fi; \
+    printf 'FFmpeg corresponding source: %s\nBtbN build scripts: https://github.com/BtbN/FFmpeg-Builds\n' \
+      "${SOURCE_URL}" > /opt/ffmpeg/SOURCE.txt; \
     cat /opt/ffmpeg/version.txt
 
 # ---------- 阶段四：后端运行时公共层 ----------

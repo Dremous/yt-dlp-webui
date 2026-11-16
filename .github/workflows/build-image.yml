@@ -93,55 +93,7 @@ jobs:
         id: ffmpeg
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          API="https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest"
-          if ! JSON=$(curl -fsSL --retry 3 \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "$API"); then
-            echo "GitHub API 不可用，无法解析 BtbN latest release；拒绝发布旧版本" >&2
-            exit 1
-          fi
-
-          VERSION=$(printf '%s' "$JSON" \
-            | jq -r '.assets[].name' \
-            | sed -nE 's/^ffmpeg-n([0-9]+\.[0-9]+)-latest-linux64-gpl-\1\.tar\.xz$/\1/p' \
-            | sort -V \
-            | tail -n1 || true)
-          if [ -z "${VERSION:-}" ]; then
-            echo "BtbN latest release 中没有 nX.Y 稳定 GPL 资产；拒绝发布旧版本" >&2
-            exit 1
-          fi
-
-          for ARCH in linux64 linuxarm64; do
-            ASSET="ffmpeg-n${VERSION}-latest-${ARCH}-gpl-${VERSION}.tar.xz"
-            if ! printf '%s' "$JSON" \
-              | jq -e --arg name "$ASSET" '.assets[]? | select(.name == $name)' >/dev/null; then
-              echo "BtbN 缺少资产 ${ASSET}；拒绝发布不完整的多架构镜像" >&2
-              exit 1
-            fi
-          done
-
-          # Release asset 的 digest 是 GitHub 计算的 sha256；传给 Dockerfile
-          # 在解压前校验，避免下载到损坏/被替换的二进制。
-          AMD64_ASSET="ffmpeg-n${VERSION}-latest-linux64-gpl-${VERSION}.tar.xz"
-          ARM64_ASSET="ffmpeg-n${VERSION}-latest-linuxarm64-gpl-${VERSION}.tar.xz"
-          AMD64_DIGEST=$(printf '%s' "$JSON" \
-            | jq -r --arg name "${AMD64_ASSET}" '.assets[]? | select(.name == $name) | .digest // ""')
-          ARM64_DIGEST=$(printf '%s' "$JSON" \
-            | jq -r --arg name "${ARM64_ASSET}" '.assets[]? | select(.name == $name) | .digest // ""')
-          if [ -z "${AMD64_DIGEST}" ] || [ -z "${ARM64_DIGEST}" ]; then
-            echo "BtbN 资产缺少 sha256 digest，无法校验下载内容" >&2
-            exit 1
-          fi
-
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "sha256_amd64=${AMD64_DIGEST#sha256:}" >> "$GITHUB_OUTPUT"
-          echo "sha256_arm64=${ARM64_DIGEST#sha256:}" >> "$GITHUB_OUTPUT"
-          echo "Resolved BtbN FFmpeg GPL stable branch: n${VERSION}"
-          echo "sha256 amd64=${AMD64_DIGEST#sha256:}"
-          echo "sha256 arm64=${ARM64_DIGEST#sha256:}"
+        run: python3 .github/scripts/resolve_btbn_release.py
 
       - name: Build and push image
         uses: docker/build-push-action@v6
@@ -152,6 +104,8 @@ jobs:
           target: latest
           # 将镜像标签版本（DATE-SHORT_SHA）烤入镜像，供「关于」界面显示
           # FFMPEG_BUILDS_REFRESH 按 run 变化，强制每次重新下载 BtbN 资产。
+          # SHA256 来自 GitHub Release asset 的 digest，属于完整性校验；
+          # 上游替换 asset 时 digest 也会随之变化，不构成供应链信任锚。
           build-args: |
             APP_VERSION=${{ steps.image.outputs.DATE }}-${{ steps.image.outputs.SHORT_SHA }}
             FFMPEG_BUILDS_VERSION=${{ steps.ffmpeg.outputs.version }}
@@ -166,14 +120,7 @@ jobs:
 
       - name: Verify registry cache
         if: success()
-        run: |
-          # cache-to 的 ignore-error 不让构建失败；这里只做可观测性检查。
-          # 镜像已经推送成功，缓存导出失败不应把发布 job 变红并跳过 smoke。
-          if docker buildx imagetools inspect "${{ steps.image.outputs.CACHE_REF }}" >/dev/null; then
-            echo "Registry cache verified: ${{ steps.image.outputs.CACHE_REF }}"
-          else
-            echo "::warning::registry cache 不可读，镜像已推送，仅影响后续构建加速"
-          fi
+        run: bash .github/scripts/verify_registry_cache.sh "${{ steps.image.outputs.CACHE_REF }}"
 
       - name: 构建失败通知
         if: failure()
@@ -221,6 +168,18 @@ jobs:
             echo "== ${PLATFORM} =="
             docker run --rm --platform "$PLATFORM" --entrypoint ffmpeg "$IMAGE" -version
             docker run --rm --platform "$PLATFORM" --entrypoint ffprobe "$IMAGE" -version
+          done
+
+      - name: Verify GPL compliance files
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+          for PLATFORM in linux/amd64 linux/arm64; do
+            echo "== ${PLATFORM} GPL files =="
+            docker run --rm --platform "$PLATFORM" --entrypoint sh "$IMAGE" -c \
+              'test -s /usr/share/doc/ffmpeg/LICENSE \
+               && test -s /usr/share/doc/ffmpeg/SOURCE.txt \
+               && test -s /usr/share/doc/ffmpeg/version.txt \
+               && grep -q "FFmpeg/FFmpeg/tree/" /usr/share/doc/ffmpeg/SOURCE.txt'
           done
 
       - name: Verify MP3 encoder
