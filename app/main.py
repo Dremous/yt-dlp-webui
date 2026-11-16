@@ -21,6 +21,7 @@
 """
 
 import json
+import logging
 import os
 import time
 import urllib.parse
@@ -42,7 +43,9 @@ from .downloader import (
 )
 from .accesslog import install as install_access_log_filter
 from .logconfig import setup_logging
+from .security import LanGuardMiddleware
 from .store import TaskStore
+from .tasklog import redact
 
 # 镜像标签版本：Docker 构建时由 workflow 注入（DATE-SHORT_SHA），本地开发回退为 dev
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
@@ -75,6 +78,8 @@ PROXY_TEST_URL = "https://www.youtube.com/generate_204"
 PROXY_TEST_TIMEOUT = 10  # 单位：秒。国内配代理时超时太短容易误报失败
 
 app = FastAPI(title="yt-dlp WebUI", version="1.0.0")
+app.add_middleware(LanGuardMiddleware)
+log = logging.getLogger(__name__)
 
 
 class DownloadRequest(BaseModel):
@@ -214,8 +219,10 @@ def delete_file(filename: str):
         path.unlink()
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="文件不存在") from None
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"删除文件失败：{exc}") from exc
+    except OSError:
+        # 异常文本可能包含服务器绝对路径；控制台留完整堆栈，客户端只给通用提示。
+        log.exception("删除文件失败：%s", path)
+        raise HTTPException(status_code=500, detail="删除文件失败，请查看服务端日志") from None
     # 若父目录是任务子目录且已空，一并清理；并发删除时失败不影响主操作
     root = DOWNLOAD_DIR.resolve()
     parent = path.parent
@@ -340,8 +347,11 @@ def _localhost_hint(proxy: str) -> Optional[str]:
 
 
 def _humanize_proxy_error(exc: Exception) -> str:
-    """把底层网络异常翻译成能照着排查的中文提示。"""
-    msg = str(exc)
+    """把底层网络异常翻译成能照着排查的中文提示。
+
+    yt-dlp 的异常可能带完整代理 URL（含账号密码），所有分支先统一脱敏。
+    """
+    msg = redact(str(exc))
     lower = msg.lower()
     if "connection refused" in lower:
         return "连接被拒绝：代理地址/端口不对，或宿主机代理未在该端口监听"
@@ -394,7 +404,13 @@ def save_proxy(req: ProxyRequest):
         url = manager.save_proxy(req.url)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    result = {"ok": True, "url": url}
+    # 保存成功后只回显脱敏地址，代理密码不进入前端状态。
+    status = manager.proxy_status()
+    result = {
+        "ok": True,
+        "url": status["url"],
+        "has_credentials": status["has_credentials"],
+    }
     hint = _localhost_hint(url)
     if hint:
         result["hint"] = hint  # 保存时就把提示给出，不必等到测试
