@@ -22,10 +22,10 @@
 当前只构建一个发布变体，CI 使用单一 registry cache tag；缓存 tag 按 ref 区分，
 不包含 `DATE` 或 commit SHA。原先的 `slim` 标签已停止更新，原 slim 用户请改用
 `latest` 或对应日期标签。`APP_VERSION` 只写在最终元数据阶段
-（安装静态 ffmpeg 的 `latest-base` 阶段不含版本号），避免每次构建都改变公共
-`runtime` 的 image config。BtbN 下载阶段会带 `FFMPEG_BUILDS_REFRESH`（run id），
-这是为了每次构建都重新拉取最新资产而故意打破缓存；其后 `latest-base` 及最终层
-仍可复用。
+（复制静态 ffmpeg 的 `latest-base` 阶段不含版本号），避免版本号变化额外污染重活。
+BtbN 下载阶段会带 `FFMPEG_BUILDS_REFRESH`（run id），这是为了每次构建都重新拉取
+最新资产而故意打破缓存；`ffmpeg-static` 因此每次变化，依赖它的 `latest-base` 会随
+二进制变化重建，最终层也随之变化。可复用的是 `runtime`、pip、deno、前端等公共层。
 
 ### 镜像内的 ffmpeg
 
@@ -44,6 +44,18 @@
 资产变化，不再由仓库里的 SHA256 锁定；许可证和 `version.txt` 会复制到
 `/usr/share/doc/ffmpeg/` 便于审计。BtbN GPL 构建的编解码器集合与 Debian 版不完全
 相同，且二进制明显更大。
+
+### GPL 合规
+
+镜像内 `/usr/share/doc/ffmpeg/` 同时保留：
+
+- `LICENSE`：BtbN 随包提供的 GPL 许可证文本。
+- `SOURCE.txt`：FFmpeg 对应源码入口（精确提交见 `version.txt`）、版本 tarball 地址，
+  以及 BtbN 构建脚本地址。
+- `version.txt`：实际打包进镜像的 ffmpeg/ffprobe 版本。
+
+对外分发镜像时请保留这些文件；如果采用书面提供源码的方式，需要确保
+`SOURCE.txt` 中的地址长期有效。
 
 > 前置设置：GitHub 仓库 `Settings → Packages` 中启用 GHCR；首次使用时需为镜像设置可见性。
 > 无需额外密钥——workflow 使用内置的 `GITHUB_TOKEN` 自动完成 GHCR 登录。
