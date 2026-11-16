@@ -179,7 +179,7 @@ jobs:
               'test -s /usr/share/doc/ffmpeg/LICENSE \
                && test -s /usr/share/doc/ffmpeg/SOURCE.txt \
                && test -s /usr/share/doc/ffmpeg/version.txt \
-               && grep -q "FFmpeg/FFmpeg/tree/" /usr/share/doc/ffmpeg/SOURCE.txt'
+               && grep -Eq "FFmpeg/FFmpeg/tree/[0-9a-f]{7,40}" /usr/share/doc/ffmpeg/SOURCE.txt'
           done
 
       - name: Verify MP3 encoder
