@@ -95,37 +95,53 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          FALLBACK="9.0"
           API="https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest"
           if ! JSON=$(curl -fsSL --retry 3 \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "$API"); then
-            echo "GitHub API 不可用，回退到 BtbN n${FALLBACK} GPL 构建" >&2
-            VERSION="$FALLBACK"
-          else
-            VERSION=$(printf '%s' "$JSON" \
-              | jq -r '.assets[].name' \
-              | sed -nE 's/^ffmpeg-n([0-9]+\.[0-9]+)-latest-linux64-gpl-\1\.tar\.xz$/\1/p' \
-              | sort -V \
-              | tail -n1 || true)
-            if [ -z "${VERSION:-}" ]; then
-              echo "BtbN latest release 中没有稳定 GPL 资产，回退到 n${FALLBACK}" >&2
-              VERSION="$FALLBACK"
-            else
-              for ARCH in linux64 linuxarm64; do
-                ASSET="ffmpeg-n${VERSION}-latest-${ARCH}-gpl-${VERSION}.tar.xz"
-                if ! printf '%s' "$JSON" \
-                  | jq -e --arg name "$ASSET" '.assets[]? | select(.name == $name)' >/dev/null; then
-                  echo "BtbN 缺少资产 ${ASSET}，回退到 n${FALLBACK}" >&2
-                  VERSION="$FALLBACK"
-                  break
-                fi
-              done
-            fi
+            echo "GitHub API 不可用，无法解析 BtbN latest release；拒绝发布旧版本" >&2
+            exit 1
           fi
+
+          VERSION=$(printf '%s' "$JSON" \
+            | jq -r '.assets[].name' \
+            | sed -nE 's/^ffmpeg-n([0-9]+\.[0-9]+)-latest-linux64-gpl-\1\.tar\.xz$/\1/p' \
+            | sort -V \
+            | tail -n1 || true)
+          if [ -z "${VERSION:-}" ]; then
+            echo "BtbN latest release 中没有 nX.Y 稳定 GPL 资产；拒绝发布旧版本" >&2
+            exit 1
+          fi
+
+          for ARCH in linux64 linuxarm64; do
+            ASSET="ffmpeg-n${VERSION}-latest-${ARCH}-gpl-${VERSION}.tar.xz"
+            if ! printf '%s' "$JSON" \
+              | jq -e --arg name "$ASSET" '.assets[]? | select(.name == $name)' >/dev/null; then
+              echo "BtbN 缺少资产 ${ASSET}；拒绝发布不完整的多架构镜像" >&2
+              exit 1
+            fi
+          done
+
+          # Release asset 的 digest 是 GitHub 计算的 sha256；传给 Dockerfile
+          # 在解压前校验，避免下载到损坏/被替换的二进制。
+          AMD64_ASSET="ffmpeg-n${VERSION}-latest-linux64-gpl-${VERSION}.tar.xz"
+          ARM64_ASSET="ffmpeg-n${VERSION}-latest-linuxarm64-gpl-${VERSION}.tar.xz"
+          AMD64_DIGEST=$(printf '%s' "$JSON" \
+            | jq -r --arg name "${AMD64_ASSET}" '.assets[]? | select(.name == $name) | .digest // ""')
+          ARM64_DIGEST=$(printf '%s' "$JSON" \
+            | jq -r --arg name "${ARM64_ASSET}" '.assets[]? | select(.name == $name) | .digest // ""')
+          if [ -z "${AMD64_DIGEST}" ] || [ -z "${ARM64_DIGEST}" ]; then
+            echo "BtbN 资产缺少 sha256 digest，无法校验下载内容" >&2
+            exit 1
+          fi
+
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "sha256_amd64=${AMD64_DIGEST#sha256:}" >> "$GITHUB_OUTPUT"
+          echo "sha256_arm64=${ARM64_DIGEST#sha256:}" >> "$GITHUB_OUTPUT"
           echo "Resolved BtbN FFmpeg GPL stable branch: n${VERSION}"
+          echo "sha256 amd64=${AMD64_DIGEST#sha256:}"
+          echo "sha256 arm64=${ARM64_DIGEST#sha256:}"
 
       - name: Build and push image
         uses: docker/build-push-action@v6
@@ -139,6 +155,8 @@ jobs:
           build-args: |
             APP_VERSION=${{ steps.image.outputs.DATE }}-${{ steps.image.outputs.SHORT_SHA }}
             FFMPEG_BUILDS_VERSION=${{ steps.ffmpeg.outputs.version }}
+            FFMPEG_BUILDS_SHA256_AMD64=${{ steps.ffmpeg.outputs.sha256_amd64 }}
+            FFMPEG_BUILDS_SHA256_ARM64=${{ steps.ffmpeg.outputs.sha256_arm64 }}
             FFMPEG_BUILDS_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
           # 缓存放在 GHCR 独立 tag，而不是 GitHub Actions 仓库缓存：
           # 双架构 mode=max 容易触及 GHA 缓存配额，导致旧层被淘汰、命中率下降。
@@ -149,9 +167,13 @@ jobs:
       - name: Verify registry cache
         if: success()
         run: |
-          # cache-to 的 ignore-error 不让构建失败；这里显式验证缓存确实写入了，
-          # 否则缓存导出失败会被静默吞掉。
-          docker buildx imagetools inspect "${{ steps.image.outputs.CACHE_REF }}" >/dev/null
+          # cache-to 的 ignore-error 不让构建失败；这里只做可观测性检查。
+          # 镜像已经推送成功，缓存导出失败不应把发布 job 变红并跳过 smoke。
+          if docker buildx imagetools inspect "${{ steps.image.outputs.CACHE_REF }}" >/dev/null; then
+            echo "Registry cache verified: ${{ steps.image.outputs.CACHE_REF }}"
+          else
+            echo "::warning::registry cache 不可读，镜像已推送，仅影响后续构建加速"
+          fi
 
       - name: 构建失败通知
         if: failure()
@@ -175,6 +197,9 @@ jobs:
       packages: read
 
     steps:
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -185,18 +210,26 @@ jobs:
       - name: Pull built image
         run: |
           IMAGE_NAME="${GITHUB_REPOSITORY,,}"
-          docker pull "ghcr.io/${IMAGE_NAME}:latest"
+          for PLATFORM in linux/amd64 linux/arm64; do
+            docker pull --platform "$PLATFORM" "ghcr.io/${IMAGE_NAME}:latest"
+          done
 
       - name: Verify ffmpeg and ffprobe
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:latest"
-          docker run --rm --entrypoint ffmpeg "$IMAGE" -version
-          docker run --rm --entrypoint ffprobe "$IMAGE" -version
+          for PLATFORM in linux/amd64 linux/arm64; do
+            echo "== ${PLATFORM} =="
+            docker run --rm --platform "$PLATFORM" --entrypoint ffmpeg "$IMAGE" -version
+            docker run --rm --platform "$PLATFORM" --entrypoint ffprobe "$IMAGE" -version
+          done
 
       - name: Verify MP3 encoder
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:latest"
-          docker run --rm --entrypoint ffmpeg "$IMAGE" \
-            -hide_banner -loglevel error \
-            -f lavfi -i "sine=frequency=440:sample_rate=44100" \
-            -t 1 -c:a libmp3lame /tmp/smoke.mp3
+          for PLATFORM in linux/amd64 linux/arm64; do
+            echo "== ${PLATFORM} MP3 =="
+            docker run --rm --platform "$PLATFORM" --entrypoint ffmpeg "$IMAGE" \
+              -hide_banner -loglevel error \
+              -f lavfi -i "sine=frequency=440:sample_rate=44100" \
+              -t 1 -c:a libmp3lame /tmp/smoke.mp3
+          done
