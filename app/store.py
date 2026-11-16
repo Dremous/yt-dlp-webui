@@ -1,230 +1,211 @@
-"""任务记录的持久化（SQLite）。
+"""任务持久化：SQLite 任务库，以及降级时的墓碑文件。
 
-为什么需要：任务列表原本只在内存里（`DownloadManager.tasks`），容器一重启就清空。
-而 `_adopt_partial` 是「从已结束的历史任务里把 .part 接管过来」——记录没了，它就
-找不到捐赠者，磁盘上下了 90% 的残片没人认领，等于白下。
+设计目标：
+- 正常路径只读写 SQLite，保证任务在重启后可恢复；
+- 数据库不可用时（锁冲突、磁盘只读等）不能让内存任务凭空消失，
+  所以删除操作退回追加墓碑文件，`load()` 再按墓碑过滤旧行；
+- 墓碑写成功才算删除成功，写失败时上层保留内存记录，避免"界面没了、库还在"。
 
-为什么用 SQLite：标准库自带、单文件、无需额外服务；每行一次 UPSERT，写放大可以
-忽略（最多 50 行，进度按 1% 节流写入）。放在配置卷而不是下载卷：任务表体积固定且
-很小，配置卷本来就是「小、要持久」的定位，下载卷则可能塞满几十 GB 的成品。
+墓碑文件与数据库同目录，文件名为 `<db>.deleted`，每行一个任务 ID。
 """
+
+from __future__ import annotations
 
 import logging
 import os
 import sqlite3
 import threading
 import time
-from pathlib import Path
-from typing import Dict, List, Optional
+from contextlib import contextmanager
+from typing import Iterator
 
-# 落盘的字段：速度 / 剩余时间是瞬时值，重启后必然过时，刻意不存
-_COLUMNS = (
-    "id", "url", "format", "status", "progress",
-    "stage", "title", "filename", "error", "created",
-)
+from .models import TaskRecord
 
-# SQLite 的“锁库”是暂时状态：别的连接可能正在提交，等一会儿通常能成功。
-# 不能和磁盘满 / 文件损坏一样直接永久降级，否则一次瞬时锁库会让本次运行
-# 剩下的任务全部不落盘。
-_MAX_LOCK_RETRIES = 3
-_LOCK_RETRY_SLEEP = 0.05
-
-
-def _is_transient_lock(exc: Exception) -> bool:
-    if not isinstance(exc, sqlite3.OperationalError):
-        return False
-    msg = str(exc).lower()
-    return "locked" in msg or "busy" in msg
-
-
-def _row_to_dict(row: sqlite3.Row) -> Dict:
-    return {name: row[name] for name in _COLUMNS}
+logger = logging.getLogger(__name__)
 
 
 class TaskStore:
-    """任务记录的读写。线程安全：每次调用开独立连接，写操作加锁串行。
+    def __init__(self, path: str):
+        self.path = path
+        self.dir = os.path.dirname(path) or "."
+        self._lock = threading.RLock()
+        self._available = True
+        self._disabled_reason = ""
+        self._conn: sqlite3.Connection | None = None
 
-    路径不可用（配置卷只读、父路径是文件、磁盘满）时不会让进程崩掉：先尝试
-    隔离坏库重建；重建仍失败就降级为「本次运行不持久化」，WebUI 照常可用。
-    """
-
-    def __init__(self, path):
-        self.path = Path(path)
-        self._lock = threading.Lock()
-        self._disabled = False
-        self._init_or_disable()
-
+    # ---- 基础状态 -------------------------------------------------------
     @property
     def available(self) -> bool:
-        """当前是否真正在持久化（降级模式下 save/delete 是空操作）。"""
-        return not self._disabled
+        return self._available
 
-    def _init_or_disable(self) -> None:
-        try:
-            self._prepare_and_init()
-            return
-        except (sqlite3.DatabaseError, OSError) as exc:
-            # 断电 / 磁盘写满后文件可能损坏。直接抛会让 import 阶段崩掉，
-            # 容器在 restart: unless-stopped 下无限重启，WebUI 完全打不开。
-            backup = self._try_quarantine(exc)
-            try:
-                self._prepare_and_init()
-            except (sqlite3.DatabaseError, OSError) as retry_exc:
-                self._disabled = True
-                log = logging.getLogger(__name__)
-                if backup:
-                    log.warning(
-                        "任务库损坏（%s），已备份为 %s；重建失败，本次运行不持久化任务：%s",
-                        exc, backup.name, retry_exc,
-                    )
-                else:
-                    log.warning(
-                        "任务库不可用（%s），本次运行不持久化任务：%s",
-                        self.path, retry_exc,
-                    )
-                return
-            if backup:
-                logging.getLogger(__name__).warning(
-                    "任务库损坏（%s），已备份为 %s 并重建", exc, backup.name
-                )
+    @property
+    def tombstone_path(self) -> str:
+        return f"{self.path}.deleted"
 
-    def _prepare_and_init(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_schema()
+    def _disable(self, exc: BaseException) -> None:
+        if self._available:
+            self._available = False
+            self._disabled_reason = str(exc)
+            logger.warning("task store unavailable, falling back to tombstones: %s", exc)
 
-    def _try_quarantine(self, exc: Exception) -> Optional[Path]:
-        if not self.path.exists():
-            return None
-        try:
-            return self._quarantine()
-        except OSError as qexc:
-            logging.getLogger(__name__).warning(
-                "任务库损坏且无法隔离（%s）：%s", exc, qexc
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.path, timeout=5, check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                title TEXT,
+                status TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                error TEXT,
+                options TEXT NOT NULL DEFAULT '{}',
+                filepath TEXT
+                )"""
             )
-            return None
+            self._conn.commit()
+        yield self._conn
 
-    def _quarantine(self) -> Path:
-        """把不可用的库文件改名留证；挪不动时抛 OSError（磁盘/权限问题另说）。"""
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        backup = self.path.with_name(f"{self.path.name}.corrupt-{stamp}")
-        index = 1
-        while backup.exists():
-            backup = self.path.with_name(f"{self.path.name}.corrupt-{stamp}-{index}")
-            index += 1
-        os.replace(self.path, backup)
-        return backup
-
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _init_schema(self) -> None:
+    def close(self) -> None:
         with self._lock:
-            conn = self._connect()
-            try:
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS tasks (
-                        id TEXT PRIMARY KEY,
-                        url TEXT NOT NULL,
-                        format TEXT NOT NULL,
-                        status TEXT NOT NULL,
-                        progress REAL NOT NULL DEFAULT 0,
-                        stage TEXT,
-                        title TEXT,
-                        filename TEXT,
-                        error TEXT,
-                        created REAL NOT NULL
-                    )
-                    """
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            if self._conn is not None:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
 
-    def _disable(self, exc: Exception) -> None:
-        """初始化成功之后又遇到磁盘写满/锁库：本次运行停止持久化，但进程继续。"""
-        if self._disabled:
-            return
-        self._disabled = True
-        logging.getLogger(__name__).warning(
-            "任务库运行时不可用，本次运行停止持久化任务：%s", exc
-        )
-
-    def _with_retry(self, operation):
-        """执行一次 SQLite 操作；只对临时的 locked/busy 做有限重试。"""
-        for attempt in range(_MAX_LOCK_RETRIES):
-            try:
-                return operation()
-            except (sqlite3.DatabaseError, OSError) as exc:
-                if attempt == _MAX_LOCK_RETRIES - 1 or not _is_transient_lock(exc):
-                    raise
-                time.sleep(_LOCK_RETRY_SLEEP * (attempt + 1))
-
-    def _save_once(self, sql: str, values: tuple) -> None:
-        with self._lock:
-            conn = self._connect()
-            try:
-                conn.execute(sql, values)
-                conn.commit()
-            finally:
-                conn.close()
-
-    def save(self, task) -> None:
-        """写入或更新一条任务记录（按 id UPSERT）。"""
-        if self._disabled:
-            return
-        values = tuple(getattr(task, name, None) for name in _COLUMNS)
-        placeholders = ", ".join("?" for _ in _COLUMNS)
-        updates = ", ".join(f"{name} = excluded.{name}" for name in _COLUMNS if name != "id")
-        sql = (
-            f"INSERT INTO tasks ({', '.join(_COLUMNS)}) VALUES ({placeholders}) "
-            f"ON CONFLICT(id) DO UPDATE SET {updates}"
-        )
+    # ---- 墓碑 -----------------------------------------------------------
+    def _read_tombstones(self) -> set[str]:
+        path = self.tombstone_path
+        if not os.path.exists(path):
+            return set()
         try:
-            self._with_retry(lambda: self._save_once(sql, values))
-        except (sqlite3.DatabaseError, OSError) as exc:
-            # 旧实现会让异常穿透后台下载线程，任务永远停在 downloading。
-            self._disable(exc)
+            with open(path, "r", encoding="utf-8") as fh:
+                return {line.strip() for line in fh if line.strip()}
+        except OSError as exc:
+            logger.warning("read task tombstones failed: %s", exc)
+            return set()
 
-    def _delete_once(self, task_id: str) -> bool:
-        with self._lock:
-            conn = self._connect()
+    def _append_tombstone(self, task_id: str) -> bool:
+        try:
+            os.makedirs(self.dir, exist_ok=True)
+            with open(self.tombstone_path, "a", encoding="utf-8") as fh:
+                fh.write(task_id + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            return True
+        except OSError as exc:
+            logger.warning("write task tombstone failed for %s: %s", task_id, exc)
+            return False
+
+    def _rewrite_tombstones(self, ids: set[str]) -> bool:
+        """整体重写墓碑，用于清理已经确认不存在的 ID；失败时保留旧文件。"""
+        path = self.tombstone_path
+        tmp = path + ".tmp"
+        try:
+            os.makedirs(self.dir, exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as fh:
+                for task_id in sorted(ids):
+                    fh.write(task_id + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+            return True
+        except OSError as exc:
+            logger.warning("rewrite task tombstones failed: %s", exc)
             try:
-                conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-                conn.commit()
-            finally:
-                conn.close()
-        return True
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return False
+
+    # ---- 读写 -----------------------------------------------------------
+    def load(self) -> list[TaskRecord]:
+        with self._lock:
+            if not self._available:
+                return []
+            tombstones = self._read_tombstones()
+            try:
+                with self._connection() as conn:
+                    rows = conn.execute(
+                        "SELECT id, url, title, status, created_at, updated_at, error, options, filepath "
+                        "FROM tasks ORDER BY created_at"
+                    ).fetchall()
+            except sqlite3.Error as exc:
+                self._disable(exc)
+                return []
+
+        records: list[TaskRecord] = []
+        for row in rows:
+            if row[0] in tombstones:
+                continue
+            records.append(
+                TaskRecord(
+                    id=row[0], url=row[1], title=row[2], status=row[3],
+                    created_at=row[4], updated_at=row[5], error=row[6],
+                    options=row[7], filepath=row[8],
+                )
+            )
+
+        # 清理已确认不在数据库里的墓碑，避免文件无限增长；清理失败不影响读取结果。
+        if tombstones:
+            existing = {row[0] for row in rows}
+            stale = tombstones - existing
+            if stale:
+                self._rewrite_tombstones(existing & tombstones)
+        return records
+
+    def save(self, record: TaskRecord) -> bool:
+        with self._lock:
+            if not self._available:
+                return False
+            try:
+                with self._connection() as conn:
+                    conn.execute(
+                        """INSERT INTO tasks
+                        (id, url, title, status, created_at, updated_at, error, options, filepath)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            url=excluded.url,
+                            title=excluded.title,
+                            status=excluded.status,
+                            updated_at=excluded.updated_at,
+                            error=excluded.error,
+                            options=excluded.options,
+                            filepath=excluded.filepath""",
+                        (record.id, record.url, record.title, record.status,
+                         record.created_at, record.updated_at, record.error,
+                         record.options, record.filepath),
+                    )
+                    conn.commit()
+                return True
+            except sqlite3.Error as exc:
+                self._disable(exc)
+                return False
 
     def delete(self, task_id: str) -> bool:
-        if self._disabled:
-            return False
-        try:
-            return self._with_retry(lambda: self._delete_once(task_id))
-        except (sqlite3.DatabaseError, OSError) as exc:
-            self._disable(exc)
-            return False
+        """删除任务。
 
-    def _load_once(self) -> List[Dict]:
+        正常路径删数据库行；数据库不可用或删除抛错时追加墓碑。
+        墓碑写成功即返回 True，让上层可以安全移除内存记录；
+        只有墓碑也写失败才返回 False。
+        """
         with self._lock:
-            conn = self._connect()
-            try:
-                rows = conn.execute(
-                    f"SELECT {', '.join(_COLUMNS)} FROM tasks ORDER BY created"
-                ).fetchall()
-            finally:
-                conn.close()
-        return [_row_to_dict(row) for row in rows]
+            if self._available:
+                try:
+                    with self._connection() as conn:
+                        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+                        conn.commit()
+                    return True
+                except sqlite3.Error as exc:
+                    self._disable(exc)
+            return self._append_tombstone(task_id)
 
-    def load(self) -> List[Dict]:
-        """按创建时间升序返回全部记录（恢复时取尾部的最新若干条）。"""
-        if self._disabled:
-            return []
-        try:
-            return self._with_retry(self._load_once)
-        except (sqlite3.DatabaseError, OSError) as exc:
-            # 启动恢复阶段读库失败也不能让 import 崩掉；按空任务列表继续。
-            self._disable(exc)
-            return []
+    def _delete_once(self, task_id: str) -> bool:
+        """供启动裁剪使用的内部删除入口；保留方法便于测试替换。"""
+        return self.delete(task_id)
