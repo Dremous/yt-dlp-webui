@@ -17,33 +17,33 @@
 
 | 变体 | 标签 |
 |---|---|
-| latest（Debian apt ffmpeg） | `latest`、`DATE`、`DATE-SHORT_SHA` |
-| slim（BtbN GPL ffmpeg） | `slim`、`DATE-slim`、`DATE-SHORT_SHA-slim` |
+| latest（BtbN GPL 静态 ffmpeg） | `latest`、`DATE`、`DATE-SHORT_SHA` |
 
-两个变体共用同一套 Python/Deno/应用层，CI 用独立 registry cache tag 分别写入；
-构建时会读取另一变体的 cache 复用公共层，但不写入对方的 tag。缓存 tag 只按
-ref/变体区分，不包含 `DATE` 或 commit SHA；`APP_VERSION` 只写在最终元数据阶段
-（安装 apt / 静态 ffmpeg 的 `latest-base`、`slim-base` 阶段不含版本号），
-避免每次构建都改变公共 `runtime` 的 image config。slim 的 BtbN 下载阶段会带
-`FFMPEG_BUILDS_REFRESH`（run id），这是为了每次构建都重新拉取最新资产而故意
-打破缓存；其后 `slim-base` 及最终层仍可复用。
+当前只构建一个发布变体，CI 使用单一 registry cache tag；缓存 tag 按 ref 区分，
+不包含 `DATE` 或 commit SHA。原先的 `slim` 标签已停止更新，原 slim 用户请改用
+`latest` 或对应日期标签。`APP_VERSION` 只写在最终元数据阶段
+（安装静态 ffmpeg 的 `latest-base` 阶段不含版本号），避免每次构建都改变公共
+`runtime` 的 image config。BtbN 下载阶段会带 `FFMPEG_BUILDS_REFRESH`（run id），
+这是为了每次构建都重新拉取最新资产而故意打破缓存；其后 `latest-base` 及最终层
+仍可复用。
 
-### latest 与 slim 的区别
+### 镜像内的 ffmpeg
 
-- **latest**：保持原有行为，`apt-get install ffmpeg`，包含 Debian 的完整编解码组合。
-- **slim**：用 BtbN/FFmpeg-Builds 的 GPL 构建（`ffmpeg-nX.Y-latest-linux64/arm64-gpl-X.Y.tar.xz`）
-  替代 apt ffmpeg。CI 每次构建会从 BtbN 的 `latest` release 中解析最高版本的
-  `nX.Y` 稳定分支，并通过 `FFMPEG_BUILDS_VERSION` build-arg 传入；
-  Dockerfile 里的 `9.0` 只是本地直接构建时的 fallback。构建阶段按 `TARGETARCH`
-  选择 amd64/arm64 资产，并带 run id 强制刷新，保证真正“每次构建重新下载”。
-  同时复制 `ffmpeg`、`ffprobe` 与随包的 `LICENSE.txt`，避免 yt-dlp 的音频探测/
+- 唯一发布变体 `latest` 使用 BtbN/FFmpeg-Builds 的 GPL 构建
+  （`ffmpeg-nX.Y-latest-linux64/arm64-gpl-X.Y.tar.xz`）。
+- CI 每次构建会从 BtbN 的 `latest` release 中解析最高版本的 `nX.Y` 稳定分支，
+  并通过 `FFMPEG_BUILDS_VERSION` build-arg 传入；Dockerfile 里的 `9.0` 只是本地
+  直接构建时的 fallback。
+- 构建阶段按 `TARGETARCH` 选择 amd64/arm64 资产，并带 run id 强制刷新，保证真正
+  “每次构建重新下载”。
+- 同时复制 `ffmpeg`、`ffprobe` 与随包的 `LICENSE.txt`，避免 yt-dlp 的音频探测/
   元数据能力退化；PUID/PGID、TZ、非 root 运行、YouTube EJS 全部保留。
 
-slim 不再固定 7.0.2：BtbN 的 nX.Y 稳定分支有新构建时，下一次 CI 会重新下载；
-当前 n9.0 资产为 FFmpeg `n9.0.2-57-g...` 自动构建。代价是构建结果会随上游资产
-变化，不再由仓库里的 SHA256 锁定；许可证和 `version.txt` 会复制到
+不再使用 Debian apt 的 ffmpeg 变体。BtbN 的 nX.Y 稳定分支有新构建时，下一次 CI 会
+重新下载；当前 n9.0 资产为 FFmpeg `n9.0.2-57-g...` 自动构建。代价是构建结果会随上游
+资产变化，不再由仓库里的 SHA256 锁定；许可证和 `version.txt` 会复制到
 `/usr/share/doc/ffmpeg/` 便于审计。BtbN GPL 构建的编解码器集合与 Debian 版不完全
-相同，且二进制明显更大；需要 Debian 发行版完整组合时继续用 latest。
+相同，且二进制明显更大。
 
 > 前置设置：GitHub 仓库 `Settings → Packages` 中启用 GHCR；首次使用时需为镜像设置可见性。
 > 无需额外密钥——workflow 使用内置的 `GITHUB_TOKEN` 自动完成 GHCR 登录。
