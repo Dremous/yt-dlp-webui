@@ -8,6 +8,8 @@ set -eu
 PUID="${PUID:-10001}"
 PGID="${PGID:-10001}"
 TZ="${TZ:-Asia/Shanghai}"
+# 记录上一次递归修正归属的 UID/GID；默认路径可被测试或特殊部署覆盖。
+OWNER_MARKER="${OWNER_MARKER:-/config/.owner-uid-gid}"
 # 默认值由本脚本赋值时不会自动进入环境，必须显式导出给 gosu 后的进程。
 export TZ
 
@@ -38,8 +40,17 @@ if [ "$(id -u)" = "0" ]; then
     fi
 
     # HOME 也要跟着改：Deno / yt-dlp 会在 $HOME 下写缓存。
-    if ! chown -R "$PUID:$PGID" /downloads /config /home/app 2>/dev/null; then
-        echo "[entrypoint] warning: 无法修改 /downloads、/config 或 /home/app 的归属，请检查挂载目录权限" >&2
+    # 大媒体库上递归 chown 可能很慢；只有首次启动或 PUID/PGID 变化时才全量修正。
+    previous_owner="$(cat "$OWNER_MARKER" 2>/dev/null || true)"
+    if [ "$previous_owner" = "$PUID:$PGID" ]; then
+        echo "[entrypoint] ownership already matches ${PUID}:${PGID}; skip recursive chown"
+    else
+        if ! chown -R "$PUID:$PGID" /downloads /config /home/app 2>/dev/null; then
+            echo "[entrypoint] warning: 无法修改 /downloads、/config 或 /home/app 的归属，请检查挂载目录权限" >&2
+        else
+            # 标记写失败不影响启动；下次启动会再试一次。
+            printf '%s\n' "$PUID:$PGID" > "$OWNER_MARKER" 2>/dev/null || true
+        fi
     fi
     exec gosu "$PUID:$PGID" "$@"
 fi
