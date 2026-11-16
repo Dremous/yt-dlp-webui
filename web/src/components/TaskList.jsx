@@ -209,7 +209,11 @@ function progressColor(status) {
 }
 
 function TaskItem({ task, onChanged, onDelete }) {
-  const meta = STATE_META[task.status] || { label: task.status, color: "default" };
+  const meta = STATE_META[task.status] || {
+    label: task.status,
+    color: "default",
+    Icon: DownloadSimple,
+  };
   // 合并 / 转码属于 postprocessing：status 仍是 downloading，但继续显示
   // “下载中”会让用户以为还在拉字节。展示逻辑抽到纯函数，便于单测覆盖。
   const display = getTaskDisplay(task, meta);

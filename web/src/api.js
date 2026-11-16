@@ -2,6 +2,14 @@
 
 const json = (res) => res.json().catch(() => ({}));
 
+// 所有写请求都带一个自定义头：跨站表单/脚本无法设置它，浏览器会先发 CORS
+// 预检，而本服务没有开放 CORS，因此可以挡住借浏览器发起的 CSRF。
+const mutate = (input, init = {}) => {
+  const headers = new Headers(init.headers || {});
+  headers.set("X-WebUI-Request", "1");
+  return fetch(input, { ...init, headers });
+};
+
 // 统一检查响应状态：非 2xx 时抛出后端 detail（或默认消息），避免前端拿到无效数据崩溃
 const check = async (res, msg) => {
   const data = await json(res);
@@ -18,7 +26,7 @@ export const api = {
   formats: () => fetch("/api/formats").then((r) => check(r, "加载格式失败")),
 
   download: (url, format) =>
-    fetch("/api/download", {
+    mutate("/api/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url, format }),
@@ -32,24 +40,24 @@ export const api = {
   files: () => fetch("/api/files").then((r) => check(r, "加载文件失败")),
 
   cancelTask: (id) =>
-    fetch(`/api/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }).then(
+    mutate(`/api/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }).then(
       (r) => check(r, "取消失败")
     ),
 
   // 删除单个已结束任务（失败/取消的任务会连带清理任务目录）
   removeTask: (id) =>
-    fetch(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }).then(
+    mutate(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }).then(
       (r) => check(r, "删除任务失败")
     ),
 
   // 清理全部已结束任务
   cleanupTasks: () =>
-    fetch("/api/tasks/cleanup", { method: "POST" }).then((r) =>
+    mutate("/api/tasks/cleanup", { method: "POST" }).then((r) =>
       check(r, "清理任务失败")
     ),
 
   deleteFile: (name) =>
-    fetch(`/api/files/${encodeURIComponent(name)}`, { method: "DELETE" }).then(
+    mutate(`/api/files/${encodeURIComponent(name)}`, { method: "DELETE" }).then(
       (r) => check(r, "删除失败")
     ),
 
@@ -59,30 +67,30 @@ export const api = {
   uploadCookie: (file) => {
     const fd = new FormData();
     fd.append("file", file);
-    return fetch("/api/cookies", { method: "POST", body: fd }).then((r) =>
+    return mutate("/api/cookies", { method: "POST", body: fd }).then((r) =>
       check(r, "上传失败")
     );
   },
 
   deleteCookie: () =>
-    fetch("/api/cookies", { method: "DELETE" }).then((r) => check(r, "清除失败")),
+    mutate("/api/cookies", { method: "DELETE" }).then((r) => check(r, "清除失败")),
 
   // 代理状态 / 保存 / 清除 / 连通性测试
   proxyStatus: () =>
     fetch("/api/proxy").then((r) => check(r, "加载代理状态失败")),
 
   saveProxy: (url) =>
-    fetch("/api/proxy", {
+    mutate("/api/proxy", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
     }).then((r) => check(r, "保存代理失败")),
 
   deleteProxy: () =>
-    fetch("/api/proxy", { method: "DELETE" }).then((r) => check(r, "清除代理失败")),
+    mutate("/api/proxy", { method: "DELETE" }).then((r) => check(r, "清除代理失败")),
 
   testProxy: (url) =>
-    fetch("/api/proxy/test", {
+    mutate("/api/proxy/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // 传了地址就测这个地址（不必先保存），否则测已保存的代理

@@ -24,8 +24,15 @@ import {
 } from "@phosphor-icons/react";
 import { api } from "../api.js";
 
-export default function ProxyPanel({ active, current, onChanged }) {
-  const [input, setInput] = useState(current || "");
+export default function ProxyPanel({
+  active,
+  current,
+  hasCredentials = false,
+  onChanged,
+}) {
+  // 含凭证的已保存代理只返回脱敏地址，不能直接放进输入框；
+  // 否则用户点保存会把 *** 当成真实用户名/密码写回配置。
+  const [input, setInput] = useState(hasCredentials ? "" : current || "");
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   // 测试/保存的结果提示：{ ok, text, hint }，hint 是「地址填错」类的额外提醒
@@ -34,21 +41,36 @@ export default function ProxyPanel({ active, current, onChanged }) {
 
   // 父组件加载到最新状态后同步到输入框（含页面首次加载）
   useEffect(() => {
-    setInput(current || "");
-  }, [current]);
+    setInput(hasCredentials ? "" : current || "");
+  }, [current, hasCredentials]);
 
   async function handleSave() {
     const value = input.trim();
     if (!value) {
-      addToast({ title: "请先填写代理地址", color: "warning" });
+      addToast({
+        title: hasCredentials ? "请输入新的完整代理地址" : "请先填写代理地址",
+        description: hasCredentials
+          ? "已保存的凭证不会回显，修改时需重新输入 user:password@host:port"
+          : undefined,
+        color: "warning",
+      });
+      return;
+    }
+    if (value.includes("://***@")) {
+      addToast({
+        title: "代理地址不能包含 ***",
+        description: "修改含凭证的代理时，请重新输入完整地址",
+        color: "warning",
+      });
       return;
     }
     setBusy(true);
     setResult(null);
     try {
       const data = await api.saveProxy(value);
-      setInput(data.url); // 回填规范化后的地址（例如自动补上的 http://）
-      onChanged(true, data.url);
+      const savedHasCredentials = !!data.has_credentials;
+      setInput(savedHasCredentials ? "" : data.url); // 回填规范化地址，凭证不回显
+      onChanged(true, data.url, savedHasCredentials);
       setResult(data.hint ? { ok: null, text: null, hint: data.hint } : null);
       addToast({
         title: "代理已保存",
@@ -87,7 +109,7 @@ export default function ProxyPanel({ active, current, onChanged }) {
       await api.deleteProxy();
       setInput("");
       setResult(null);
-      onChanged(false, "");
+      onChanged(false, "", false);
       addToast({ title: "代理已清除", description: "已恢复直连", color: "success" });
     } catch {
       addToast({ title: "清除失败", description: "请重试", color: "danger" });
@@ -127,7 +149,11 @@ export default function ProxyPanel({ active, current, onChanged }) {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <Input
             label="代理地址"
-            placeholder="http://host.docker.internal:7890"
+            placeholder={
+              active && hasCredentials
+                ? "已保存含凭证的代理；修改请重新输入完整地址"
+                : "http://host.docker.internal:7890"
+            }
             value={input}
             onValueChange={setInput}
             variant="bordered"
@@ -183,6 +209,17 @@ export default function ProxyPanel({ active, current, onChanged }) {
             </Button>
           )}
         </div>
+
+        {active && current && (
+          <p className="text-xs text-slate-500 break-all">
+            当前代理：<code className="text-slate-300">{current}</code>
+            {hasCredentials && (
+              <span className="text-amber-500/90">
+                　凭证已隐藏；修改时请重新输入完整地址
+              </span>
+            )}
+          </p>
+        )}
 
         {/* 保存/测试结果：hint 用黄色警示，结果用绿/红区分 */}
         {result?.hint && (

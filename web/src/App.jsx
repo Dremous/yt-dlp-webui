@@ -19,7 +19,7 @@ export default function App() {
   const [taskEnded, setTaskEnded] = useState(0);
   const [files, setFiles] = useState([]);
   const [cookieOn, setCookieOn] = useState(false);
-  const [proxy, setProxy] = useState({ active: false, url: "" });
+  const [proxy, setProxy] = useState({ active: false, url: "", hasCredentials: false });
   const [about, setAbout] = useState(null);
 
   const motionSafe = useMotionSafe();
@@ -37,7 +37,11 @@ export default function App() {
       .catch((e) => console.warn("加载 Cookie 状态失败", e));
     api
       .proxyStatus()
-      .then((s) => setProxy({ active: !!s.active, url: s.url || "" }))
+      .then((s) => setProxy({
+        active: !!s.active,
+        url: s.url || "",
+        hasCredentials: !!s.has_credentials,
+      }))
       .catch((e) => console.warn("加载代理状态失败", e));
     api.about().then(setAbout).catch((e) => console.warn("加载关于信息失败", e));
   }, []);
@@ -138,7 +142,14 @@ export default function App() {
         <ProxyPanel
           active={proxy.active}
           current={proxy.url}
-          onChanged={(active, url) => setProxy({ active, url: url || "" })}
+          hasCredentials={proxy.hasCredentials}
+          onChanged={(active, url, hasCredentials) =>
+            setProxy({
+              active,
+              url: url || "",
+              hasCredentials: !!hasCredentials,
+            })
+          }
         />
       </motion.div>
 
