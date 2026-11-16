@@ -3,21 +3,16 @@ name: Build & Push Image
 on:
   schedule:
     - cron: "0 0 * * 0"
-  workflow_dispatch:              # 支持手动触发
+  workflow_dispatch:
   push:
     branches:
       - main
     tags:
       - "v*"
 
-
-# 同一分支/标签的整次运行串行；不取消正在导出的 cache-to，
-# 只让后到的运行排队等待，避免构建结束时缓存写不进去。
-# 同一 run 内的 latest / slim 两个矩阵 job 仍然并行。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
-
 
 jobs:
   build:
@@ -25,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write                  # 允许推送 GHCR 包
+      packages: write
 
     strategy:
       fail-fast: false
@@ -52,18 +47,12 @@ jobs:
           echo "DATE=${DATE}" >> "$GITHUB_OUTPUT"
           echo "SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
-          # 缓存按变体 + ref 隔离：latest 与 slim 的最终层不同，共用同一个
-          # cache tag 会互相覆盖；branch/tag 名也可能含 /、中文、空格等
-          # OCI tag 不允许的字符，也可能超长。先清洗成合法字符并截断，
-          # 再拼 12 位 hash，保证不同 ref 不会因为截断撞到同一个 tag。
           SAFE_REF=$(printf '%s' "$GITHUB_REF_NAME" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | cut -c1-60)
           REF_HASH=$(printf '%s' "${GITHUB_REF_TYPE}/${GITHUB_REF_NAME}" | sha256sum | cut -c1-12)
           CACHE_TAG="buildcache-${VARIANT}-${GITHUB_REF_TYPE}-${SAFE_REF}-${REF_HASH}"
           echo "CACHE_TAG=${CACHE_TAG}" >> "$GITHUB_OUTPUT"
           echo "CACHE_REF=ghcr.io/${IMAGE_NAME}:${CACHE_TAG}" >> "$GITHUB_OUTPUT"
 
-          # 另一变体的缓存只读复用：两个变体共享 runtime / pip / deno 层，
-          # 读对方的 registry cache 能提高命中率，但写入仍只写自己的 tag。
           if [ "$VARIANT" = "latest" ]; then
             OTHER_VARIANT=slim
           else
@@ -72,7 +61,6 @@ jobs:
           OTHER_CACHE_TAG="buildcache-${OTHER_VARIANT}-${GITHUB_REF_TYPE}-${SAFE_REF}-${REF_HASH}"
           echo "OTHER_CACHE_REF=ghcr.io/${IMAGE_NAME}:${OTHER_CACHE_TAG}" >> "$GITHUB_OUTPUT"
 
-          # latest 保持原有三个标签；slim 使用独立标签，避免覆盖 latest。
           if [ "$VARIANT" = "latest" ]; then
             TAGS="$(printf '%s\n' \
               "ghcr.io/${IMAGE_NAME}:latest" \
@@ -106,9 +94,6 @@ jobs:
       - name: Resolve cache source
         id: cache
         run: |
-          # 首次构建没有 buildcache 时不要传 cache-from，避免把 missing manifest
-          # 当成构建错误；有缓存时才启用 registry cache 导入。
-          # 本变体、另一变体依次检查，另一变体只读，不写入。
           : > /tmp/cache-from
           for ref in "${{ steps.image.outputs.CACHE_REF }}" "${{ steps.image.outputs.OTHER_CACHE_REF }}"; do
             if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
@@ -121,6 +106,27 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Resolve latest static ffmpeg image
+        id: ffmpeg
+        run: |
+          set -euo pipefail
+          FALLBACK="mwader/static-ffmpeg:9.0.2-1"
+          TAGS=$(curl -fsSL --retry 3 \
+            'https://hub.docker.com/v2/repositories/mwader/static-ffmpeg/tags?page_size=100&ordering=last_updated')
+          LATEST=$(printf '%s' "$TAGS" \
+            | jq -r '.results[].name' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' \
+            | sort -V \
+            | tail -n1 || true)
+          if [ -z "${LATEST:-}" ]; then
+            echo "无法解析最新静态 ffmpeg tag，回退到 $FALLBACK" >&2
+            TAG="9.0.2-1"
+          else
+            TAG="$LATEST"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "image=mwader/static-ffmpeg:$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
@@ -128,11 +134,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           target: ${{ matrix.target }}
-          # 将镜像标签版本（DATE-SHORT_SHA）烤入镜像，供「关于」界面显示
           build-args: |
             APP_VERSION=${{ steps.image.outputs.DATE }}-${{ steps.image.outputs.SHORT_SHA }}
-          # 缓存放在 GHCR 独立 tag，而不是 GitHub Actions 仓库缓存：
-          # 双架构 mode=max 容易触及 GHA 缓存配额，导致旧层被淘汰、命中率下降。
+            FFMPEG_STATIC_IMAGE=${{ steps.ffmpeg.outputs.image }}
           cache-from: ${{ steps.cache.outputs.from }}
           cache-to: type=registry,ref=${{ steps.image.outputs.CACHE_REF }},mode=max,ignore-error=true
           tags: ${{ steps.image.outputs.TAGS }}
@@ -140,14 +144,11 @@ jobs:
       - name: Verify registry cache
         if: success()
         run: |
-          # cache-to 的 ignore-error 不让构建失败；这里显式验证缓存确实写入了，
-          # 否则缓存导出失败会被静默吞掉。
           docker buildx imagetools inspect "${{ steps.image.outputs.CACHE_REF }}" >/dev/null
 
       - name: 构建失败通知
         if: failure()
         env:
-          # 可选：配置仓库 secret WEBHOOK_URL（飞书/企业微信/钉钉机器人地址）即可推送失败告警
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
         run: |
           echo "::error::yt-dlp-webui ${{ matrix.variant }} 镜像构建失败（run #${{ github.run_number }}）"

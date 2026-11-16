@@ -22,21 +22,24 @@
 
 两个变体共用同一套 Python/Deno/应用层，CI 用独立 registry cache tag 分别写入；
 构建时会读取另一变体的 cache 复用公共层，但不写入对方的 tag。缓存 tag 只按
-ref/变体区分，不包含 `DATE` 或 commit SHA；`APP_VERSION` 只写在最终阶段，
-避免每次构建都改变公共 `runtime` 的 image config，导致 apt / 静态二进制层
-被判定为 cache miss。
+ref/变体区分，不包含 `DATE` 或 commit SHA；`APP_VERSION` 只写在最终元数据阶段
+（安装 apt / 静态 ffmpeg 的 `latest-base`、`slim-base` 阶段不含版本号），
+避免每次构建都改变公共 `runtime` 的 image config 或 ffmpeg 所在阶段的缓存键，
+导致 apt / 静态二进制层被判定为 cache miss。
 
 ### latest 与 slim 的区别
 
 - **latest**：保持原有行为，`apt-get install ffmpeg`，包含 Debian 的完整编解码组合。
-- **slim**：用固定版本的 `static-ffmpeg` 二进制（johnvansickle 7.0.2，GPLv3）替代 apt ffmpeg，
-  同时复制 `ffmpeg` 与 `ffprobe`，避免 yt-dlp 的音频探测/元数据能力退化。
-  下载资产固定为 `eugeneware/ffmpeg-static` 的 `b6.1.1` Release，四个资产的 SHA256 写死在
-  Dockerfile 中；PUID/PGID、TZ、非 root 运行、YouTube EJS 全部保留。
+- **slim**：用 `mwader/static-ffmpeg` 的静态 `ffmpeg`/`ffprobe` 替代 apt ffmpeg。
+  CI 每次构建会解析该镜像的最新稳定 tag，并通过 `FFMPEG_STATIC_IMAGE` build-arg 传入；
+  Dockerfile 里的 `9.0.2-1` 只是本地直接构建时的可复现 fallback。
+  同时复制 `ffmpeg` 与 `ffprobe`，避免 yt-dlp 的音频探测/元数据能力退化；
+  PUID/PGID、TZ、非 root 运行、YouTube EJS 全部保留。
 
-slim 的代价是构建时依赖 GitHub Release 下载；如果上游资产被替换，SHA256 校验会让构建失败，
-需要人工确认后更新 Dockerfile 中的版本与校验值。GPLv3 许可证和上游 README 会复制到
-镜像内的 `/usr/share/doc/ffmpeg/`。
+slim 不再固定 7.0.2：上游有新稳定版时，下一次 CI 构建会自动拉取。代价是构建结果会随
+上游 tag 变化，不再由仓库里的 SHA256 锁定；`versions.json` 和 GPLv3 许可证会复制到
+`/usr/share/doc/ffmpeg/` 便于审计。静态 ffmpeg 的编解码器集合与 Debian 版不完全相同，
+需要 Debian 发行版完整组合时继续用 latest。
 
 > 前置设置：GitHub 仓库 `Settings → Packages` 中启用 GHCR；首次使用时需为镜像设置可见性。
 > 无需额外密钥——workflow 使用内置的 `GITHUB_TOKEN` 自动完成 GHCR 登录。
@@ -64,7 +67,7 @@ docker exec yt-dlp-webui tail -n 100 /config/webui.log    # 或进容器看
 - 日志里每 30 秒一条 `GET /api/formats` 是 Docker 的 HEALTHCHECK 探活，已默认静音（失败时仍会打印）
 - 容器入口与本地 `uvicorn app.main:app` 都读同一组 `LOG_*` 变量（文件在本地同样生效）
 
-> 也可以交给 Docker 自己轮转：`--log-opt max-size=10m --log-opt max-file=5`。
+> 也可以交给 Docker 自己轮转：`--log-opt max-size=10m --log-max-file=5`。
 > 两者不冲突——文件那份方便拷走，`docker logs` 那份方便 `docker logs -f`。
 
 ## 本地开发
