@@ -135,9 +135,9 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertIn("ffmpeg-n${FFMPEG_BUILDS_VERSION}", content)
         self.assertNotIn("mwader/static-ffmpeg", content)
         self.assertNotIn("FFMPEG_STATIC_IMAGE", content)
-        # 不再有写死的 gzip SHA256，也不从 eugeneware 的 Release 下载。
+        # 不再有写死的 gzip SHA256，也不从 eugeneware 的 Release 下载；
+        # 新的校验来自 GitHub Release asset 的 digest（见 checksum 测试）。
         self.assertNotIn("ffmpeg-linux-x64.gz", content)
-        self.assertNotIn("sha256sum -c", content)
 
         latest_base = content.split("FROM runtime AS latest-base", 1)[1].split(
             "FROM latest-base AS latest", 1
@@ -154,6 +154,28 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertIn("ffmpeg -version", latest_base)
         self.assertIn("ffprobe -version", latest_base)
 
+    def test_dockerfile_verifies_btbn_asset_checksum(self):
+        dockerfile = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        workflow = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        # GitHub Release asset 自带 sha256 digest，CI 必须把它传给 Dockerfile。
+        self.assertIn("ARG FFMPEG_BUILDS_SHA256_AMD64", dockerfile)
+        self.assertIn("ARG FFMPEG_BUILDS_SHA256_ARM64", dockerfile)
+        self.assertIn("sha256sum -c", dockerfile)
+        self.assertIn("FFMPEG_BUILDS_SHA256_AMD64=${{ steps.ffmpeg.outputs.sha256_amd64 }}", workflow)
+        self.assertIn("FFMPEG_BUILDS_SHA256_ARM64=${{ steps.ffmpeg.outputs.sha256_arm64 }}", workflow)
+        self.assertIn("sha256_amd64", workflow)
+        self.assertIn("sha256_arm64", workflow)
+        self.assertIn("digest", workflow)
+
+    def test_dockerfile_includes_ffmpeg_source_offer(self):
+        content = (self.root / "Dockerfile").read_text(encoding="utf-8")
+        # GPL 二进制需要保留对应源码/构建脚本的提供方式。
+        self.assertIn("SOURCE.txt", content)
+        self.assertIn("ffmpeg.org/releases", content)
+        self.assertIn("BtbN/FFmpeg-Builds", content)
+
     def test_workflow_resolves_latest_stable_btbn_gpl_build(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"
@@ -168,7 +190,18 @@ class DockerfileConfigTest(unittest.TestCase):
         )
         self.assertIn("FFMPEG_BUILDS_REFRESH=${{ github.run_id }}", content)
         self.assertIn("sort -V", content)
-        self.assertIn("9.0", content)
+        self.assertNotIn("FALLBACK", content)
+
+    def test_workflow_fails_when_btbn_release_resolution_fails(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        # CI 发布 latest 是浮动标签，解析失败必须失败，不能静默回退旧版本。
+        self.assertIn("GitHub API 不可用", content)
+        self.assertIn("BtbN latest release 中没有", content)
+        self.assertIn("BtbN 缺少资产", content)
+        self.assertIn("exit 1", content)
+        self.assertNotIn('VERSION="$FALLBACK"', content)
 
     def test_workflow_cache_ref_is_isolated_by_ref(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
@@ -221,8 +254,18 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertIn("--entrypoint ffprobe", content)
         self.assertIn("Verify MP3 encoder", content)
         self.assertIn("libmp3lame", content)
-        self.assertIn("docker pull \"ghcr.io/${IMAGE_NAME}:latest\"", content)
+        self.assertIn('docker pull --platform "$PLATFORM"', content)
+        self.assertIn('docker run --rm --platform "$PLATFORM"', content)
         self.assertNotIn("variant: [latest, slim]", content)
+
+    def test_workflow_smoke_tests_both_architectures(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        smoke = content.split("smoke:", 1)[1]
+        self.assertIn("Set up QEMU", smoke)
+        self.assertIn("linux/amd64", smoke)
+        self.assertIn("linux/arm64", smoke)
 
     def test_runtime_user_can_be_overridden_with_puid_pgid(self):
         content = (self.root / "Dockerfile").read_text(encoding="utf-8")
@@ -419,6 +462,14 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertIn("name: Verify registry cache", content)
         self.assertIn("docker buildx imagetools inspect", content)
 
+    def test_workflow_cache_verification_is_non_blocking(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        # 镜像已推送后，缓存导出失败只应告警，不应把发布 job 变红并跳过 smoke。
+        self.assertIn("::warning::registry cache", content)
+        self.assertIn("if docker buildx imagetools inspect", content)
+
     def test_workflow_does_not_cancel_in_progress_build(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
             encoding="utf-8"
@@ -435,6 +486,17 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertNotIn(":slim", quickstart)
         self.assertNotIn(":slim", readme)
         self.assertNotIn("slim（静态 ffmpeg）", operations)
+        self.assertNotIn("abc1234", operations)
+        self.assertNotIn("abc1234", quickstart)
+        self.assertNotIn("abc1234", readme)
+        self.assertIn("20261116-3a11e8a", quickstart)
+
+    def test_docs_describe_cache_invalidation(self):
+        operations = (self.root / "docs/operations.md").read_text(encoding="utf-8")
+        # FFMPEG_BUILDS_REFRESH 让 ffmpeg-static 每次变化，依赖它的 latest-base 也会重建。
+        self.assertIn("可复用的是 `runtime`", operations)
+        self.assertIn("`latest-base` 会随", operations)
+        self.assertIn("复制静态 ffmpeg", operations)
 
 
 if __name__ == "__main__":
