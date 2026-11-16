@@ -23,6 +23,7 @@
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 import urllib.parse
@@ -240,6 +241,169 @@ def delete_file(filename: str):
 # ---------------------------------------------------------------------------
 MAX_COOKIE_BYTES = 5 * 1024 * 1024
 _COOKIE_READ_CHUNK = 64 * 1024
+_NETSCAPE_HEADER = "# Netscape HTTP Cookie File"
+_HTTPONLY_PREFIX = "#HttpOnly_"
+_NETSCAPE_FIELD_COUNT = 7
+
+
+def _cookie_text(value, label: str, *, allow_empty: bool = False) -> str:
+    """把 JSON Cookie 字段规范成可安全写入制表符分隔文件的文本。"""
+    if value is None:
+        raise HTTPException(status_code=400, detail=f"Cookie JSON 的 {label} 不能为空")
+    if not isinstance(value, str):
+        value = str(value)
+    if any(ch in value for ch in ("\t", "\r", "\n")):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cookie JSON 的 {label} 不能包含制表符或换行",
+        )
+    if not allow_empty and not value.strip():
+        raise HTTPException(status_code=400, detail=f"Cookie JSON 的 {label} 不能为空")
+    return value
+
+
+def _cookie_flag(value, label: str, *, default: bool = False) -> bool:
+    """解析浏览器 JSON 的布尔字段，兼容 true/false 与常见字符串写法。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+        if normalized in ("false", "0", "no", "off", ""):
+            return False
+    raise HTTPException(
+        status_code=400,
+        detail=f"Cookie JSON 的 {label} 需为布尔值",
+    )
+
+
+def _cookie_expiry(item: dict) -> str:
+    """把浏览器 JSON 的到期时间转成 Netscape 的秒级整数；会话 Cookie 写 0。"""
+    raw = item.get("expirationDate")
+    if raw in (None, ""):
+        raw = item.get("expires")
+    if raw in (None, ""):
+        return "0"
+    try:
+        expires = int(float(raw))
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(
+            status_code=400,
+            detail="Cookie JSON 的 expirationDate 不是有效时间",
+        ) from None
+    return str(expires) if expires > 0 else "0"
+
+
+def _json_cookies_to_netscape(parsed: list) -> str:
+    """把浏览器 JSON Cookie 转成 yt-dlp 可读取的 Netscape cookies.txt。
+
+    浏览器扩展常见字段是 domain / hostOnly / path / secure / expirationDate /
+    name / value / httpOnly；不同扩展可能多带 sameSite 等字段，这里忽略。
+    """
+    lines = []
+    for index, item in enumerate(parsed, 1):
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cookie JSON 第 {index} 项不是对象",
+            )
+
+        domain = _cookie_text(item.get("domain"), f"第 {index} 项 domain").strip()
+        if not domain or "/" in domain or " " in domain:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cookie JSON 第 {index} 项 domain 无效",
+            )
+
+        host_only = _cookie_flag(item.get("hostOnly"), f"第 {index} 项 hostOnly")
+        include_subdomains = _cookie_flag(
+            item.get("includeSubdomains"), f"第 {index} 项 includeSubdomains"
+        )
+        if host_only:
+            domain = domain.lstrip(".")
+            include_subdomains = False
+        elif include_subdomains or domain.startswith("."):
+            include_subdomains = True
+            if not domain.startswith("."):
+                domain = "." + domain
+        if not domain.strip("."):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cookie JSON 第 {index} 项 domain 无效",
+            )
+
+        path = _cookie_text(
+            item.get("path") or "/", f"第 {index} 项 path", allow_empty=True
+        ) or "/"
+        if not path.startswith("/"):
+            path = "/" + path
+
+        secure = _cookie_flag(item.get("secure"), f"第 {index} 项 secure")
+        http_only = _cookie_flag(item.get("httpOnly"), f"第 {index} 项 httpOnly")
+        name = _cookie_text(item.get("name"), f"第 {index} 项 name")
+        value = _cookie_text(
+            item.get("value"), f"第 {index} 项 value", allow_empty=True
+        )
+
+        domain_field = f"{_HTTPONLY_PREFIX}{domain}" if http_only else domain
+        lines.append(
+            "\t".join([
+                domain_field,
+                "TRUE" if include_subdomains else "FALSE",
+                path,
+                "TRUE" if secure else "FALSE",
+                _cookie_expiry(item),
+                name,
+                value,
+            ])
+        )
+
+    if not lines:
+        raise HTTPException(status_code=400, detail="Cookie JSON 没有可导入的项")
+    return (
+        f"{_NETSCAPE_HEADER}\n"
+        "# Converted from browser JSON by yt-dlp WebUI\n"
+        "\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+
+
+def _validate_netscape_cookie_text(text: str) -> None:
+    """按 yt-dlp 的 Netscape 解析规则校验 Cookie 文件。"""
+    lines = text.splitlines()
+    if not lines or not lines[0].lstrip().startswith(_NETSCAPE_HEADER):
+        raise HTTPException(
+            status_code=400,
+            detail="Cookie 文件缺少 Netscape HTTP Cookie File 头",
+        )
+
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        # #HttpOnly_ 是 Netscape 的 HttpOnly Cookie 数据行，不是注释。
+        if line.startswith(_HTTPONLY_PREFIX):
+            line = line[len(_HTTPONLY_PREFIX):]
+        elif line.lstrip().startswith("#"):
+            continue
+
+        fields = line.split("\t")
+        if len(fields) != _NETSCAPE_FIELD_COUNT:
+            raise HTTPException(
+                status_code=400,
+                detail="Netscape 格式错误：每行应有 7 个制表符分隔字段",
+            )
+        if fields[4] and not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", fields[4]):
+            raise HTTPException(
+                status_code=400,
+                detail="Netscape 格式错误：expires 字段必须是数字或空值",
+            )
+
 
 
 async def _read_cookie_upload(file: UploadFile) -> bytes:
@@ -276,41 +440,32 @@ async def upload_cookie(file: UploadFile):
         text = content.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="Cookie 文件必须是 UTF-8 文本")
-    stripped = text.lstrip()
+    normalized = text.lstrip("\ufeff \t\r\n")
 
-    # Netscape 格式：以头部注释开头，每行数据需为制表符分隔的字段
-    if stripped.startswith("# Netscape HTTP Cookie File"):
-        data_lines = [ln for ln in text.splitlines()
-                      if ln.strip() and not ln.lstrip().startswith("#")]
-        for ln in data_lines:
-            fields = ln.rstrip("\n").split("\t")
-            if len(fields) < 5:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Netscape 格式错误：行字段不足 → {ln[:60]}",
-                )
-    # JSON 格式：数组或单个对象，每个元素含 name / domain / value
-    elif stripped.startswith(("{", "[")):
+    # Netscape 格式：以头部注释开头，每行数据需为 7 个制表符分隔字段。
+    if normalized.startswith(_NETSCAPE_HEADER):
+        _validate_netscape_cookie_text(normalized)
+        content = normalized.encode("utf-8")
+    # JSON 格式：接受浏览器扩展导出，转换成 yt-dlp 真正能读取的 Netscape。
+    elif normalized.startswith(("{", "[")):
         try:
-            parsed = json.loads(text)
+            parsed = json.loads(text.lstrip("\ufeff"))
         except ValueError:
             raise HTTPException(status_code=400, detail="Cookie JSON 解析失败")
         if isinstance(parsed, dict):
-            parsed = [parsed]
+            if isinstance(parsed.get("cookies"), list):
+                parsed = parsed["cookies"]
+            else:
+                parsed = [parsed]
         if not isinstance(parsed, list) or not parsed:
             raise HTTPException(status_code=400, detail="Cookie JSON 需为非空数组")
-        for item in parsed:
-            if not isinstance(item, dict) or not all(
-                k in item for k in ("name", "domain", "value")
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Cookie JSON 项需包含 name / domain / value 字段",
-                )
+        converted = _json_cookies_to_netscape(parsed)
+        _validate_netscape_cookie_text(converted)
+        content = converted.encode("utf-8")
     else:
         raise HTTPException(
             status_code=400,
-            detail="无法识别的 Cookie 格式：需为 Netscape cookies.txt 或 JSON",
+            detail="无法识别的 Cookie 格式：需为 Netscape cookies.txt 或浏览器 JSON",
         )
 
     manager.save_cookie(content)

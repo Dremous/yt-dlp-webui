@@ -168,6 +168,34 @@ class TaskOutputTest(RemovalTestBase):
             self.assertIsNone(self.manager._task_output(task_dir))
 
 
+class FinishWithoutOutputTest(RemovalTestBase):
+    def test_success_without_output_is_marked_failed(self):
+        """yt-dlp 返回成功但目录没有成品时，不能显示成有完成态却没链接。"""
+        task = DownloadTask("e4", "https://example.com/v", "best")
+        with self.manager._lock:
+            self.manager.tasks[task.id] = task
+
+        class _FakeYDL:
+            def __init__(self, _opts):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def extract_info(self, _url, download=True):
+                return {"title": "fake"}
+
+        with mock.patch("app.downloader.yt_dlp.YoutubeDL", _FakeYDL):
+            self.manager._download(task)
+
+        self.assertEqual(task.status, "failed")
+        self.assertIsNone(task.filename)
+        self.assertIn("未找到输出文件", task.error)
+
+
 class ReportFailureTest(RemovalTestBase):
     def test_skips_removed_task(self):
         """任务记录已被删除时，失败处理不能再把目录建回来（否则留下孤儿目录）。"""

@@ -261,7 +261,29 @@ class DockerfileConfigTest(unittest.TestCase):
         self.assertIn("libmp3lame", content)
         self.assertIn('docker pull --platform "$PLATFORM"', content)
         self.assertIn('docker run --rm --platform "$PLATFORM"', content)
+        self.assertIn("IMAGE_DIGEST", content)
+        self.assertIn("needs.build.outputs.digest", content)
+        self.assertIn("ghcr.io/${IMAGE_NAME}@${IMAGE_DIGEST}", content)
         self.assertNotIn("variant: [latest, slim]", content)
+
+    def test_workflow_latest_tag_only_follows_main(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('if [ "${GITHUB_REF}" = "refs/heads/main" ]', content)
+        self.assertIn("tag / 其他 ref 构建不能覆盖它", content)
+
+    def test_workflow_smoke_uses_immutable_build_digest(self):
+        content = (self.root / ".github/workflows/build-image.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("outputs:", content)
+        self.assertIn("digest: ${{ steps.build.outputs.digest }}", content)
+        self.assertIn("id: build", content)
+        smoke = content.split("smoke:", 1)[1]
+        self.assertIn("IMAGE_DIGEST", smoke)
+        self.assertIn("ghcr.io/${IMAGE_NAME}@${IMAGE_DIGEST}", smoke)
+        self.assertNotIn("ghcr.io/${IMAGE_NAME}:latest", smoke)
 
     def test_workflow_smoke_tests_both_architectures(self):
         content = (self.root / ".github/workflows/build-image.yml").read_text(
@@ -401,6 +423,50 @@ class DockerfileConfigTest(unittest.TestCase):
                 "gosu 10001:10001 true TZ=Asia/Shanghai",
                 log.read_text(encoding="utf-8"),
             )
+
+    def test_entrypoint_skips_recursive_chown_when_owner_marker_matches(self):
+        """PUID/PGID 未变化时不重复递归 chown 大媒体库。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            script = root / "docker-entrypoint.sh"
+            shutil.copy2(self.root / "docker-entrypoint.sh", script)
+            marker = root / "owner-marker"
+            marker.write_text("1000:1000\n", encoding="utf-8")
+            log = root / "calls.log"
+
+            commands = {
+                "id": '#!/bin/sh\n'
+                      'if [ "$1" = "-u" ]; then echo 0; exit 0; fi\n'
+                      'exec /usr/bin/id "$@"\n',
+                "chown": '#!/bin/sh\n'
+                         'printf "chown %s\\n" "$*" >> "$ENTRYPOINT_LOG"\n',
+                "gosu": '#!/bin/sh\n'
+                        'printf "gosu %s\\n" "$*" >> "$ENTRYPOINT_LOG"\n',
+            }
+            for name, body in commands.items():
+                path = bin_dir / name
+                path.write_text(body, encoding="utf-8")
+                path.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
+            env["ENTRYPOINT_LOG"] = str(log)
+            env["OWNER_MARKER"] = str(marker)
+            env["PUID"] = "1000"
+            env["PGID"] = "1000"
+
+            result = subprocess.run(
+                ["/bin/sh", str(script), "true"],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("chown ", log.read_text(encoding="utf-8"))
+            self.assertIn("gosu 1000:1000 true", log.read_text(encoding="utf-8"))
 
     def test_entrypoint_rejects_non_numeric_puid(self):
         with tempfile.TemporaryDirectory() as tmp:

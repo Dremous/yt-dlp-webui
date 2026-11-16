@@ -309,6 +309,42 @@ class TaskStoreTest(unittest.TestCase):
         self.assertIsNone(mgr.get("x"))
         self.assertEqual(TaskStore(self.db).load(), [])
 
+    def test_persist_writes_outside_manager_lock_by_snapshot(self):
+        """SQLite 写盘不能阻塞 snapshot；写盘期间删除还要撤回晚到的 INSERT。"""
+        store = TaskStore(self.db)
+        mgr = DownloadManager(Path(self._tmp.name) / "dl", store=store)
+        task = _task("slow", status="finished")
+        with mgr._lock:
+            mgr.tasks["slow"] = task
+
+        entered = threading.Event()
+        release = threading.Event()
+        original_save = store.save_values
+
+        def slow_save(values):
+            entered.set()
+            release.wait(5)
+            return original_save(values)
+
+        store.save_values = slow_save
+        worker = threading.Thread(target=mgr.persist, args=(task,), daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(5), "persist 没有进入慢写窗口")
+
+            # 旧实现会在持 manager 锁时写 SQLite，这里会一直卡住。
+            snapshot = mgr.snapshot(limit=1)
+            self.assertEqual(snapshot[0]["id"], "slow")
+
+            # 写盘未完成时删除任务，晚到的 INSERT 必须被撤回。
+            removed = mgr.remove_task("slow")
+            self.assertEqual(removed["id"], "slow")
+        finally:
+            release.set()
+            worker.join(5)
+
+        self.assertEqual(TaskStore(self.db).load(), [])
+
     def test_hook_flushes_progress(self):
         store = TaskStore(self.db)
         store.save(_task("p", status="downloading", progress=0.0))

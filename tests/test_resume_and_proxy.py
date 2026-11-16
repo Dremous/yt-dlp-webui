@@ -141,6 +141,28 @@ class AdoptPartialTest(unittest.TestCase):
         self.assertTrue(final.exists(), "成品文件不能当临时文件搬走")
         self.assertFalse((new_dir / final.name).exists())
 
+    def test_parts_from_different_donors_are_not_mixed(self):
+        """应整套接管一个 donor，不能把 A 的分片和 B 的 .ytdl 拼在一起。"""
+        self._task("old1", "failed")
+        self._task("old2", "failed")
+        old1_video = self._part("old1", "video [id].f701.mp4.part", 10)
+        old1_state = self._part("old1", "video [id].f701.mp4.ytdl", 1)
+        self._part("old2", "audio [id].f140.m4a.part", 20)
+        self._part("old2", "audio [id].f140.m4a.ytdl", 2)
+        task = self._task("new", "downloading")
+        new_dir = self.root / "new"
+        new_dir.mkdir()
+
+        summary = self.manager._adopt_partial(task, new_dir)
+
+        self.assertIn("2 个分片", summary)
+        self.assertTrue((new_dir / "audio [id].f140.m4a.part").exists())
+        self.assertTrue((new_dir / "audio [id].f140.m4a.ytdl").exists())
+        self.assertFalse((new_dir / "video [id].f701.mp4.part").exists())
+        self.assertFalse((new_dir / "video [id].f701.mp4.ytdl").exists())
+        self.assertTrue(old1_video.exists(), "未选中的 donor 必须原样保留")
+        self.assertTrue(old1_state.exists())
+
     def test_existing_target_not_overwritten(self):
         self._task("old", "failed")
         self._part("old", "video [id].f701.mp4.part", 10)

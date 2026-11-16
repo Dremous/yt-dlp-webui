@@ -501,13 +501,24 @@ class DownloadManager:
         删库、删内存；后台线程随后带着终态调用 persist 时，墓碑会让它直接返回。
         只检查 self.tasks 里“对象是否还在”不够，因为删库成功到删内存之间
         存在一个窗口，晚到的 INSERT 会让任务在重启后“复活”。
+
+        SQLite 写入不放在 _lock 内：先在锁内复制一份字段快照，释放锁后再写；
+        写完再检查一次删除状态，如果期间任务被删，立即补一次 DELETE。
+        这样慢盘/锁库时不会阻塞 snapshot()、cancel() 等状态读取。
         """
         if self._store is None:
             return
         with self._lock:
             if task.id in self._deleting or self.tasks.get(task.id) is not task:
                 return
-            self._store.save(task)
+            values = self._store.task_values(task)
+        try:
+            self._store.save_values(values)
+        finally:
+            with self._lock:
+                if task.id in self._deleting or self.tasks.get(task.id) is not task:
+                    # 快照到落库之间任务被删：把晚到的 INSERT 撤掉，避免重启复活。
+                    self._store.delete(task.id)
 
     def _restore_tasks(self) -> None:
         """启动时恢复任务记录。
@@ -797,6 +808,12 @@ class DownloadManager:
                 info = ydl.extract_info(task.url, download=True)
             title = (info or {}).get("title")
             filename = self._task_output(task_dir)
+            if not filename:
+                # yt-dlp 返回成功但目录里没有成品（例如只写了被过滤的中间文件，
+                # 或目录被外部清空）不能显示成“已完成但没有下载链接”。
+                if not self._fail(task, "下载结束但未找到输出文件"):
+                    self._cleanup_cancelled(task, task_dir)
+                return
             if not self._finish(task, title, filename):
                 self._cleanup_cancelled(task, task_dir)
         except DownloadCancelled:
@@ -828,12 +845,13 @@ class DownloadManager:
         - rename 在同一文件系统内是原子的，同一个 .part 只会被一个任务拿到，
           并发提交同一链接不会出现两个线程写同一个文件；
         - 目标目录已有同名文件时跳过，不覆盖；
+        - 只从一个捐赠者搬一整套残片，避免把不同下载尝试的 .part/.ytdl 拼在一起；
         - 搬走后旧目录只剩日志，删除历史任务不会误删正在续传的数据。
 
         只从已结束（failed / cancelled / finished）且**格式相同**的任务里取：不同分辨率的
         预设共用同一个 outtmpl，残片同名但字节内容不同，混着接管会拼出损坏的视频。
-        正在下载的任务是活动写者，它的 .part 不能动。同名的多个残片取最大的那份（重复失败时它最接近下完）。
-        返回给日志用的一句话摘要，没接管到任何东西时返回 None。
+        正在下载的任务是活动写者，它的 .part 不能动。按捐赠者的总残片大小选一份，
+        不跨捐赠者混拼。返回给日志用的一句话摘要，没接管到任何东西时返回 None。
         """
         candidates = []
         with self._lock:
@@ -853,6 +871,7 @@ class DownloadManager:
                 # 用户可能正好删除了捐赠者目录；这不是新任务失败的理由，
                 # 当作没接管到，本次从头下载即可。
                 continue
+            donor_parts = []
             for part in parts:
                 # HLS/DASH 的 `.part-FragN` 和 yt-dlp 的 `.ytdl` 也是续传所需，
                 # 不能只 glob("*.part")；成品文件与日志/图片不在这里搬。
@@ -868,15 +887,17 @@ class DownloadManager:
                 except OSError:
                     continue
                 if size > 0:
-                    candidates.append((size, part))
+                    donor_parts.append((size, part))
+            if donor_parts:
+                candidates.append((sum(size for size, _ in donor_parts), donor_parts))
 
         if not candidates:
             return None
-        # 按大小倒序：同名残片先遇到的就是最大的那份
-        candidates.sort(key=lambda item: item[0], reverse=True)
+        # 选总残片最大的捐赠者，整套搬过来；不要按单个文件名跨 donor 取最大。
+        _, donor_parts = max(candidates, key=lambda item: item[0])
 
         moved_count, moved_bytes, seen = 0, 0, set()
-        for size, part in candidates:
+        for size, part in donor_parts:
             if part.name in seen:
                 continue
             seen.add(part.name)

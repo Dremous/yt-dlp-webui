@@ -73,6 +73,57 @@ class _FakeUpload:
         return chunk
 
 
+class CookieConversionTest(unittest.TestCase):
+    def test_json_cookie_is_converted_to_netscape(self):
+        parsed = [{
+            "domain": ".example.com",
+            "hostOnly": False,
+            "path": "/",
+            "secure": True,
+            "expirationDate": 1893456000,
+            "name": "sid",
+            "value": "abc",
+            "httpOnly": True,
+        }]
+
+        text = main._json_cookies_to_netscape(parsed)
+
+        self.assertTrue(text.startswith("# Netscape HTTP Cookie File\n"))
+        self.assertIn(
+            "#HttpOnly_.example.com\tTRUE\t/\tTRUE\t1893456000\tsid\tabc",
+            text,
+        )
+        main._validate_netscape_cookie_text(text)
+
+    def test_json_host_only_cookie_has_no_subdomain_flag(self):
+        parsed = [{
+            "domain": ".example.com",
+            "hostOnly": True,
+            "path": "",
+            "name": "sid",
+            "value": "abc",
+        }]
+
+        text = main._json_cookies_to_netscape(parsed)
+
+        self.assertIn("example.com\tFALSE\t/\tFALSE\t0\tsid\tabc", text)
+
+    def test_json_cookie_with_invalid_domain_is_rejected(self):
+        with self.assertRaises(HTTPException) as ctx:
+            main._json_cookies_to_netscape([
+                {"domain": "", "name": "sid", "value": "abc"}
+            ])
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_netscape_session_cookie_allows_empty_expiry(self):
+        """Netscape 会话 Cookie 的 expires 字段可以为空，不能误拒。"""
+        text = (
+            "# Netscape HTTP Cookie File\n"
+            ".example.com\tTRUE\t/\tFALSE\t\tsid\tabc\n"
+        )
+        main._validate_netscape_cookie_text(text)
+
+
 class CookieUploadTest(unittest.TestCase):
     def test_oversized_upload_is_rejected_without_reading(self):
         fake = _FakeUpload(LIMIT + 1, refuse_read=True)
@@ -211,6 +262,30 @@ class MainRoutesTest(unittest.TestCase):
         self.assertFalse(cookie.json()["active"])
         self.assertFalse(proxy.json()["active"])
         self.assertFalse(proxy.json()["has_credentials"])
+
+    def test_cookie_json_upload_is_saved_as_netscape(self):
+        self.addCleanup(main.manager.remove_cookie)
+        payload = json.dumps([{
+            "domain": ".example.com",
+            "path": "/",
+            "secure": True,
+            "expirationDate": 1893456000,
+            "name": "sid",
+            "value": "abc",
+            "httpOnly": True,
+        }]).encode("utf-8")
+
+        response = self.client.post(
+            "/api/cookies",
+            files={"file": ("cookies.json", payload, "application/json")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        saved = main.manager.cookie_file.read_text(encoding="utf-8")
+        self.assertIn("# Netscape HTTP Cookie File", saved)
+        self.assertIn("#HttpOnly_.example.com\tTRUE\t/\tTRUE\t1893456000\tsid\tabc", saved)
+        self.assertNotIn('"domain"', saved)
+        main._validate_netscape_cookie_text(saved)
 
     def test_mutation_requires_x_webui_request_header(self):
         client = TestClient(main.app, raise_server_exceptions=False)
